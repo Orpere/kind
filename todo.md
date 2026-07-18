@@ -120,11 +120,26 @@ kind create cluster --config kind-bpf-b.yaml --name cluster-b
 
 ---
 
-## 🪪 Phase 2 — Create ONE Shared Digital Identity (The Trust Root)
+## 🪪 Phase 2 — Create the Right Certificates (The Trust Root)
 
-This is the most important security step. We create a single **Certificate Authority (CA)** — like a trusted passport office — and give the *same* one to both clusters.
+### 🪪 What certificates do we need? (plain language)
 
-**Why?** Without this, each cluster would issue its own identity and refuse to trust the other (the "CA certificates do not match" error). One shared CA means both clusters speak the same trusted language — this is our **mTLS** foundation and the primary encryption/authentication layer for this exercise.
+Certificates are like **digital ID cards** issued by a **trusted passport office** (the
+Certificate Authority, or **CA**). For Cluster Mesh with mTLS you create exactly **one
+shared CA** that *both* clusters trust:
+
+| File | What it is | Who creates it | Shared? |
+|------|-----------|----------------|--------|
+| `ca.crt` | The CA's public ID (the "passport office" certificate) | You, once | ✅ Same on both clusters |
+| `ca.key` | The CA's private signing key (keep secret!) | You, once | ✅ Same on both clusters |
+| Cluster serving certs | Per-cluster TLS certs for the mesh API | **Cilium generates these automatically** from the shared CA | ❌ Each cluster has its own |
+
+> 🔑 **Key point:** you only create the **CA** (`ca.crt` + `ca.key`). Cilium then
+> automatically issues the actual per-cluster certificates from that CA. Because both
+> clusters trust the *same* CA, they accept each other's certs → that is **mTLS**.
+> If each cluster made its *own* CA, you'd hit the `Cilium CA certificates do not match` error.
+
+**Why a shared CA?** Without this, each cluster would issue its own identity and refuse to trust the other. One shared CA means both clusters speak the same trusted language — this is our **mTLS** foundation and the primary encryption/authentication layer for this exercise.
 
 ```bash
 # 1. Create the shared "passport office" (one time)
@@ -137,6 +152,33 @@ kubectl create secret generic cilium-ca -n kube-system \
 kubectl create secret generic cilium-ca -n kube-system \
   --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key --context kind-cluster-b
 ```
+
+### 🛠️ Step2 — Verify the CA looks correct (optional but recommended)
+
+```bash
+openssl x509 -in ca.crt -noout -subject -issuer -dates
+# Expected: Subject/Issuer both = /CN=clustermesh-ca (self-signed root)
+```
+
+### 🛠️ Step3 — Confirm both clusters hold the IDENTICAL CA
+
+```bash
+kubectl --context kind-cluster-a -n kube-system get secret cilium-ca -o jsonpath='{.data.ca\.crt}' | base64 -d | openssl x509 -noout -fingerprint
+kubectl --context kind-cluster-b -n kube-system get secret cilium-ca -o jsonpath='{.data.ca\.crt}' | base64 -d | openssl x509 -noout -fingerprint
+# The two fingerprints MUST match
+```
+
+### 🔗 Step4 — Point Cilium at the shared CA at install time
+
+The Phase 3 install commands include these flags so Cilium uses your CA:
+
+```bash
+--set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
+--set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
+```
+
+Cilium then auto-generates the per-cluster serving certificates from this CA, and the
+clusters mutually authenticate over mTLS.
 
 ```mermaid
 flowchart LR
