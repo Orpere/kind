@@ -141,6 +141,30 @@ graph LR
     B_ID -- "✅ IDs are different → works" --> A_ID
 ```
 
+### 0e. Create the shared CA (mTLS trust root)
+
+Before installing Cilium, create **one** Certificate Authority (CA) and give the *same*
+secret to both clusters. This is the foundation of mutual TLS (mTLS): both clusters trust
+the same root, so they authenticate each other and encrypt the mesh control traffic.
+Skipping this leads to the `Cilium CA certificates do not match` error.
+
+```bash
+# 1. Create the shared CA once (or reuse an existing internal CA)
+openssl req -x509 -newkey rsa:4096 -nodes \
+  -keyout ca.key -out ca.crt -days 3650 -subj "/CN=clustermesh-ca"
+
+# 2. Install the SAME ca.crt/ca.key on both clusters
+kubectl create secret generic cilium-ca -n kube-system \
+  --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key --context kind-cluster-a
+kubectl create secret generic cilium-ca -n kube-system \
+  --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key --context kind-cluster-b
+```
+
+> **WireGuard (optional):** because both kind clusters share the same local Docker
+> network, mTLS alone is sufficient for this exercise. To add an extra data-plane
+> encryption layer (e.g. on untrusted networks), append
+> `--enable-wireguard --wireguard-enabled` to the install commands below.
+
 ### 0f. Install Cilium on Cluster A (with cluster ID 1)
 
 ```bash
@@ -161,8 +185,13 @@ cilium install \
     --set ingressController.enabled=true \
     --set hubble.enabled=true \
     --set hubble.relay.enabled=true \
-    --set hubble.ui.enabled=true
+    --set hubble.ui.enabled=true \
+    --set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
+    --set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
 ```
+
+> **Security:** the last two lines point Cilium at the **shared CA** created earlier (Phase/Step: single root of trust for mTLS). This is what authenticates and encrypts the mesh control/API traffic.
+> **WireGuard (optional):** both clusters run on the same local kind/Docker network, so mTLS alone is sufficient for this exercise. To add an extra data-plane encryption layer on untrusted networks, append `--enable-wireguard --wireguard-enabled` to the install command.
 
 Wait for Cilium to be ready:
 
@@ -190,8 +219,12 @@ cilium install \
     --set ingressController.enabled=true \
     --set hubble.enabled=true \
     --set hubble.relay.enabled=true \
-    --set hubble.ui.enabled=true
+    --set hubble.ui.enabled=true \
+    --set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
+    --set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
 ```
+
+> **Security:** same shared-CA flags as Cluster A (mTLS). Optional `--enable-wireguard --wireguard-enabled` adds data-plane encryption (not required for this local kind exercise).
 
 ```bash
 cilium status --context kind-cluster-b --wait
@@ -216,8 +249,8 @@ cilium status --context kind-cluster-b
 ### 0j. Verify cluster IDs are correctly assigned
 
 ```bash
-cilium config get --context kind-cluster-a | grep -E "cluster-(id|name)"
-cilium config get --context kind-cluster-b | grep -E "cluster-(id|name)"
+cilium config view --context kind-cluster-a | grep -E "cluster-(id|name)"
+cilium config view --context kind-cluster-b | grep -E "cluster-(id|name)"
 ```
 
 **Expected output:**
@@ -230,36 +263,163 @@ cluster-id                                       2
 cluster-name                                      cluster-b
 ```
 
+### 0k. (Alternative) Set cluster ID/name via the Cilium CLI
+
+If Cilium is already installed and you need to change the cluster ID or name, you can use `cilium config set` instead of re-installing. **Note:** the cluster ID is a core identity used by Cilium's eBPF datapath, so changing it requires the agent and operator to restart and re-derive identities.
+
+Set the values on each cluster:
+
+```bash
+# Cluster A → ID 1, name cluster-a
+cilium config set --context kind-cluster-a cluster-id 1
+cilium config set --context kind-cluster-a cluster-name cluster-a
+
+# Cluster B → ID 2, name cluster-b
+cilium config set --context kind-cluster-b cluster-id 2
+cilium config set --context kind-cluster-b cluster-name cluster-b
+```
+
+Roll the Cilium daemonset and operator so the new ID takes effect (the agents must restart to re-initialize the eBPF identity allocator):
+
+```bash
+kubectl rollout restart -n kube-system ds/cilium --context kind-cluster-a
+kubectl rollout restart -n kube-system deployment/cilium-operator --context kind-cluster-a
+kubectl rollout restart -n kube-system ds/cilium --context kind-cluster-b
+kubectl rollout restart -n kube-system deployment/cilium-operator --context kind-cluster-b
+```
+
+Wait for the restart to complete and confirm the IDs are now applied:
+
+```bash
+cilium status --context kind-cluster-a --wait
+cilium status --context kind-cluster-b --wait
+cilium config view --context kind-cluster-a | grep -E "cluster-(id|name)"
+cilium config view --context kind-cluster-b | grep -E "cluster-(id|name)"
+```
+
+> ⚠️ Changing a cluster ID after pods have been assigned identities can cause brief network disruption while endpoints are re-derived. It is safest to set the correct ID at **install time** (steps 0f/0g) and only use `config set` when necessary. Also ensure the two clusters use **different** IDs (1–255); duplicate IDs break Cluster Mesh routing.
+
 ---
 
 ## Step 1 — Enable the Cluster Mesh API
 
-Cilium nodes in each cluster need to expose a port so the *other* cluster can reach them. Kind does not have a cloud LoadBalancer, so we use `NodePort`.
+Cilium nodes in each cluster need to expose a port so the *other* cluster can reach them. The `cilium clustermesh enable` command takes a `--service-type` flag that controls how the `cilium-clustermesh` service is published. Pick the option that fits your environment:
 
-### 1a. Enable on Cluster A
+| Service type | Best for | Requires | Stable address? |
+|--------------|----------|----------|-----------------|
+| `NodePort` | Kind / bare-metal labs (default for this exercise) | Nothing extra | ❌ Random port per node |
+| `LoadBalancer` | Cloud, or Kind + **optional** MetalLB | A LoadBalancer implementation | ✅ Stable LB IP |
+| `ClusterIP` + tunnel | Restricted / separate networks | VPN / gateway / port-forward | ➖ Depends on tunnel |
 
+> All three expose the same `cilium-clustermesh` API (TLS on port `32379` by default); only the *reachability* mechanism differs. For this local kind exercise, **NodePort needs nothing extra** — MetalLB is only needed if you specifically want a `LoadBalancer` IP.
+
+### 1a. Option A — NodePort (default, zero-config on Kind)
+
+Kind has no cloud LoadBalancer, so `NodePort` works out of the box and needs no extra components. A high port is opened on every node and the other cluster connects to `<node-ip>:<nodeport>`.
+
+Enable on Cluster A:
 ```bash
 cilium clustermesh enable --context kind-cluster-a --service-type NodePort
 ```
 
-### 1b. Enable on Cluster B
-
+Enable on Cluster B:
 ```bash
 cilium clustermesh enable --context kind-cluster-b --service-type NodePort
 ```
 
-### 1c. Verify the mesh service was created
+Because the NodePort is randomized, tell Cilium which node address to advertise (otherwise it may pick an unreachable one):
+```bash
+# Advertise the kind node's IP so the remote cluster can reach it
+cilium clustermesh enable --context kind-cluster-a \
+  --service-type NodePort \
+  --clustermesh-apiserver-node-port 32379
+```
+
+### 1b. Option B — LoadBalancer (stable IP; **optional** MetalLB on Kind)
+
+If you want a stable IP instead of a random port, use `--service-type LoadBalancer`. On a real cloud this is automatic; on **Kind** you must first install [MetalLB](https://metallb.universe.tf/) (an optional add-on — **not required** for the NodePort default). Skip this option entirely if NodePort is fine.
+
+**1. Install MetalLB on both clusters** (one-time):
+```bash
+# For each cluster context
+for CTX in kind-cluster-a kind-cluster-b; do
+  kubectl --context "$CTX" apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
+  kubectl --context "$CTX" -n metallb-system wait --for=condition=Ready pods --all --timeout=120s
+done
+```
+
+**2. Give MetalLB an IP pool** matching the Kind docker network (default `172.18.0.0/16` / `172.19.0.0/16`). Create this on both clusters:
+```bash
+cat <<'EOF' | kubectl --context kind-cluster-a apply -f -
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: clustermesh-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 172.18.255.0/24   # adjust to your kind network
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: clustermesh-advert
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - clustermesh-pool
+EOF
+# Repeat the same manifest for kind-cluster-b (use its network range)
+```
+
+**3. Enable the mesh with LoadBalancer** on both clusters:
+```bash
+cilium clustermesh enable --context kind-cluster-a --service-type LoadBalancer
+cilium clustermesh enable --context kind-cluster-b --service-type LoadBalancer
+```
+
+**4. Grab the assigned LB IP** (this is the stable address the other cluster connects to):
+```bash
+kubectl get svc -n kube-system cilium-clustermesh --context kind-cluster-a \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
+```
+
+### 1c. Option C — ClusterIP + tunnel (no NodePort/LB exposure)
+
+If you cannot open a NodePort or LB (e.g. restricted networks), keep the service as `ClusterIP` and make it reachable through your own networking — a VPN, a gateway, or a manual `kubectl port-forward`. This is the most manual option.
+
+**1. Enable with ClusterIP** on both clusters:
+```bash
+cilium clustermesh enable --context kind-cluster-a --service-type ClusterIP
+cilium clustermesh enable --context kind-cluster-b --service-type ClusterIP
+```
+
+**2. Expose it locally** (example using port-forward; for real cross-host reachability use a site-to-site VPN or ingress/gateway instead):
+```bash
+# Forward the apiserver port to localhost on Cluster B's machine
+kubectl --context kind-cluster-b port-forward -n kube-system svc/cilium-clustermesh 32379:32379 &
+```
+
+**3. Connect using the reachable address** instead of relying on auto-discovery:
+```bash
+cilium clustermesh connect --context kind-cluster-a \
+  --destination-context kind-cluster-b \
+  --destination-api-server https://<reachable-ip-or-hostname>:32379
+```
+Replace `<reachable-ip-or-hostname>` with whatever your tunnel/VPN makes reachable (the LB IP, VPN IP, or `localhost` if port-forwarding on the same host).
+
+### 1d. Verify the mesh service was created
 
 ```bash
 kubectl get svc -n kube-system --context kind-cluster-a | grep clustermesh
 kubectl get svc -n kube-system --context kind-cluster-b | grep clustermesh
 ```
 
-**Expected output:** A `cilium-clustermesh` service of type `NodePort` exists on both clusters.
+**Expected output:** A `cilium-clustermesh` service exists on both clusters — type `NodePort`, `LoadBalancer`, or `ClusterIP` depending on the option you chose.
 
 **What happened:**
 - TLS certificates were generated for encrypted communication
-- A `NodePort` service (port `32379` by default) was created on both clusters
+- A `cilium-clustermesh` service (port `32379` by default) was created on both clusters
 - Cilium agents are now listening for inbound mesh connections
 
 ```mermaid
@@ -267,10 +427,10 @@ sequenceDiagram
     participant User as 👤 You
     participant CA as 🔵 Cluster A
     participant CB as 🟢 Cluster B
-    User->>CA: cilium clustermesh enable --service-type NodePort
-    CA-->>User: ✅ TLS certs created, NodePort :32379 ready
-    User->>CB: cilium clustermesh enable --service-type NodePort
-    CB-->>User: ✅ TLS certs created, NodePort :32379 ready
+    User->>CA: cilium clustermesh enable --service-type <NodePort|LoadBalancer|ClusterIP>
+    CA-->>User: ✅ TLS certs created, service ready
+    User->>CB: cilium clustermesh enable --service-type <NodePort|LoadBalancer|ClusterIP>
+    CB-->>User: ✅ TLS certs created, service ready
 ```
 
 ---
@@ -283,7 +443,7 @@ sequenceDiagram
 cilium clustermesh status --context kind-cluster-b
 ```
 
-Note the NodePort IP and port — this is the address Cluster A will connect to.
+Note the mesh endpoint — for NodePort this is the node IP and port; for LoadBalancer the assigned LB IP; for ClusterIP the tunneled/reachable address you set up in Step 1. This is the address Cluster A will connect to.
 
 ### 2b. Connect Cluster A → Cluster B
 
@@ -293,7 +453,7 @@ cilium clustermesh connect --context kind-cluster-a --destination-context kind-c
 
 This command:
 1. Reads the TLS certificates from Cluster A
-2. Connects to Cluster B's exposed `cilium-clustermesh` NodePort
+2. Connects to Cluster B's exposed `cilium-clustermesh` service (NodePort, LoadBalancer, or tunneled ClusterIP — whichever you chose in Step 1)
 3. Establishes an encrypted Wireguard (or VXLAN) tunnel
 4. Begins bidirectional endpoint and service sync
 
@@ -310,7 +470,55 @@ Number of cluster meshed: 1
 Cluster "cluster-b" (or "cluster-a"): configured, connected
 ```
 
-If you see `disconnected` or `failed`, check that the NodePort is reachable from the other cluster.
+If you see `disconnected` or `failed`, check that the mesh service endpoint (NodePort, LoadBalancer IP, or tunneled address from Step 1) is reachable from the other cluster.
+
+### 2c(i). Troubleshooting: Cilium CA certificate mismatch
+
+If `cilium clustermesh connect` fails with:
+
+```
+Error: Unable to connect cluster: Cilium CA certificates do not match between clusters
+cluster-a and cluster-b. Use --allow-mismatching-ca to allow this by adding remote CAs
+to the CA bundle
+```
+
+This means each cluster generated its **own** self-signed CA when `clustermesh enable` ran, so Cluster A does not trust Cluster B's certificates (and vice versa). Fix it one of two ways:
+
+**Option 1 — Allow the mismatch (fast, recommended for labs/demos):**
+
+Add `--allow-mismatching-ca` to the connect command. This appends the remote cluster's CA to the local CA bundle so both sides trust each other:
+
+```bash
+cilium clustermesh connect \
+  --context kind-cluster-a \
+  --destination-context kind-cluster-b \
+  --allow-mismatching-ca
+```
+
+**Option 2 — Share a single CA (proper, recommended for production):**
+
+Use the *same* CA on both clusters instead of letting each generate its own. Pre-create a shared CA secret on both clusters, then enable the mesh pointing at it:
+
+```bash
+# Generate (or reuse) a single CA, then create the secret on BOTH clusters
+kubectl create secret generic cilium-ca \
+  --namespace kube-system \
+  --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key \
+  --context kind-cluster-a
+kubectl create secret generic cilium-ca \
+  --namespace kube-system \
+  --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key \
+  --context kind-cluster-b
+
+# Re-enable the mesh using the shared CA on both clusters
+cilium clustermesh enable --context kind-cluster-a --service-type NodePort
+cilium clustermesh enable --context kind-cluster-b --service-type NodePort
+
+# Connect — no --allow-mismatching-ca needed
+cilium clustermesh connect --context kind-cluster-a --destination-context kind-cluster-b
+```
+
+> With Option 2 the CAs already match, so the connect command succeeds without the flag.
 
 ### 2d. Check Cilium node list to see remote nodes
 
@@ -338,6 +546,108 @@ graph TB
     style CA_CM fill:#4A90D9,stroke:#2C5F8A,color:#fff
     style CB_CM fill:#4A90D9,stroke:#2C5F8A,color:#fff
 ```
+
+---
+
+## 🌐 Cross-Environment Clusters (different networks / no direct reachability)
+
+> **Note:** This section applies when the two clusters live in **separate networks**
+> (different VPCs, on-prem ↔ cloud, regions with no peering) — *not* the default
+> local kind exercise, where both clusters share one Docker network and reach each other
+> directly via NodePort + mTLS. For the local kind exercise, you do **not** need
+> WireGuard, a VPN, or MetalLB.
+
+When the two clusters live in **different environments or networks** (separate VPCs, on-prem ↔ cloud, different regions with no peering), Cluster A cannot reach Cluster B's `cilium-clustermesh` endpoint directly. The secure, production-grade pattern is:
+
+1. Keep the mesh API **internal** (`ClusterIP`) — never expose it via NodePort/LoadBalancer to the public internet.
+2. Build an **encrypted site-to-site tunnel** between the two networks (WireGuard or cloud IPsec).
+3. Use a **single shared CA** so the clusters mutually authenticate over mTLS (no `--allow-mismatching-ca`).
+
+This gives you defense-in-depth: the transport tunnel encrypts the data plane, and ClusterMesh's own mTLS (shared CA) authenticates each cluster. On an untrusted network you want **both**; on a trusted local network, mTLS alone (the default kind exercise) is sufficient.
+
+### A. Shared CA (do this first — required for all options)
+
+Generate one CA and install the **same** secret on both clusters so their certificates are trusted:
+
+```bash
+# Create a CA once (or reuse an existing internal CA)
+openssl req -x509 -newkey rsa:4096 -nodes \
+  -keyout ca.key -out ca.crt -days 3650 \
+  -subj "/CN=clustermesh-ca"
+
+# Install the SAME ca.crt/ca.key on both clusters
+kubectl create secret generic cilium-ca -n kube-system \
+  --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key \
+  --context kind-cluster-a
+kubectl create secret generic cilium-ca -n kube-system \
+  --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key \
+  --context kind-cluster-b
+```
+
+Then enable the mesh as `ClusterIP` on both (no public exposure):
+
+```bash
+cilium clustermesh enable --context kind-cluster-a --service-type ClusterIP
+cilium clustermesh enable --context kind-cluster-b --service-type ClusterIP
+```
+
+### B. Option 1 — WireGuard site-to-site (most aligned with Cilium)
+
+Run a WireGuard tunnel between a gateway node/router in each cluster. The `cilium-clustermesh` `ClusterIP` is only reachable through that tunnel.
+
+```bash
+# On Cluster A's gateway host (example keys — generate your own)
+wg genkey | tee a_privatekey | wg pubkey > a_publickey
+wg genkey | tee b_privatekey | wg pubkey > b_publickey
+
+# Cluster A gateway → peer with Cluster B gateway
+wg set wg0 private-key ./a_privatekey \
+  peer "$(cat b_publickey)" \
+  allowed-ips 0.0.0.0/0 \
+  endpoint <B-GATEWAY-PUBLIC-IP>:51820 \
+  persistent-keepalive 25
+ip link set wg0 up
+
+# Mirror the symmetric config on Cluster B's gateway (peer = A's public key + endpoint)
+```
+
+Route the remote cluster's pod/servcie CIDR through the tunnel, then connect pointing at the **tunnel-reachable** address:
+
+```bash
+cilium clustermesh connect --context kind-cluster-a \
+  --destination-context kind-cluster-b \
+  --destination-api-server https://<B-CLUSTER-INTERNAL-IP>:32379
+```
+
+WireGuard already encrypts with AEAD ciphers, so it stacks cleanly on top of ClusterMesh mTLS.
+
+### C. Option 2 — Cloud IPsec / provider VPN (AWS Transit Gateway, GCP Cloud VPN, Azure VPN Gateway)
+
+If the clusters run in cloud VPCs, use the provider's managed encrypted peering instead of rolling your own WireGuard:
+
+- **AWS:** VPC peering or Transit Gateway + Site-to-Site VPN (IPsec).
+- **GCP:** Cloud VPN (HA VPN, IPsec) between the two VPC networks.
+- **Azure:** VPN Gateway (IPsec/IKE) or ExpressRoute.
+
+After the private tunnel/VPC peering is up, the `cilium-clustermesh` `ClusterIP` becomes reachable over the private link:
+
+```bash
+cilium clustermesh connect --context kind-cluster-a \
+  --destination-context kind-cluster-b \
+  --destination-api-server https://<B-CLUSTER-INTERNAL-IP>:32379
+```
+
+Provider-managed IPsec means you get encryption and IKE key rotation without managing it yourself.
+
+### D. Option 3 — Central/shared CA + mTLS over the tunnel (security baseline)
+
+Regardless of which transport (WireGuard or cloud VPN) you choose, the security baseline is the **shared CA from section A**. This ensures:
+
+- Each cluster proves its identity to the other via mutual TLS (no anonymous handshake).
+- A compromised node in one network cannot impersonate the other cluster's apiserver.
+- You avoid `--allow-mismatching-ca`, which would blindly trust any remote CA.
+
+> **Do not** expose `cilium-clustermesh` via NodePort/LoadBalancer to the public internet. Even though ClusterMesh uses TLS, a public endpoint dramatically increases attack surface. Keep it `ClusterIP` and reach it only through the encrypted tunnel.
 
 ---
 
@@ -637,12 +947,13 @@ flowchart LR
 | 1 | Create clusters | `kind create cluster --config kind-bpf-a.yaml` | `kind get clusters` → `cluster-a`, `cluster-b` |
 | 2 | Identify contexts | built-in | `kubectl config get-contexts` → `kind-cluster-a`, `kind-cluster-b` |
 | 3 | Nodes ready | `kubectl get nodes --context kind-cluster-a` | All `Ready` |
-| 4 | Assign cluster IDs | `--set cluster.id=1` on A, `--set cluster.id=2` on B | Unique IDs set in install step |
-| 5 | Install Cilium A | `cilium install --context kind-cluster-a --set cluster.id=1 ...` | `cilium status --context kind-cluster-a --wait` → `OK` |
-| 6 | Install Cilium B | `cilium install --context kind-cluster-b --set cluster.id=2 ...` | `cilium status --context kind-cluster-b --wait` → `OK` |
+| 4 | Create shared CA (mTLS root) | `openssl ...` + `kubectl create secret cilium-ca` on both | Both clusters share the same `cilium-ca` secret |
+| 5 | Assign cluster IDs | `--set cluster.id=1` on A, `--set cluster.id=2` on B (or `cilium config set`) | `cilium config view` shows unique IDs |
+| 6 | Install Cilium A | `cilium install --context kind-cluster-a --set cluster.id=1 ... --set clustermesh.apiserver.tls.ca.*` | `cilium status --context kind-cluster-a --wait` → `OK` |
+| 7 | Install Cilium B | `cilium install --context kind-cluster-b --set cluster.id=2 ... --set clustermesh.apiserver.tls.ca.*` | `cilium status --context kind-cluster-b --wait` → `OK` |
 | 7 | Connectivity test | `cilium connectivity test --context kind-cluster-a` | All checks pass |
-| 8 | Enable mesh A | `cilium clustermesh enable --context kind-cluster-a` | `cilium clustermesh status` shows enabled |
-| 9 | Enable mesh B | `cilium clustermesh enable --context kind-cluster-b` | `cilium clustermesh status` shows enabled |
+| 8 | Enable mesh A | `cilium clustermesh enable --context kind-cluster-a --service-type <NodePort\|LoadBalancer\|ClusterIP>` | `cilium clustermesh status` shows enabled |
+| 9 | Enable mesh B | `cilium clustermesh enable --context kind-cluster-b --service-type <NodePort\|LoadBalancer\|ClusterIP>` | `cilium clustermesh status` shows enabled |
 | 10 | Connect clusters | `cilium clustermesh connect --context kind-cluster-a --destination-context kind-cluster-b` | `cilium clustermesh status` → `Connected` on both |
 | 11 | Remote nodes seen | `kubectl get ciliumnode --context kind-cluster-a` | Shows node from both clusters |
 | 12 | Deploy backend B | `kubectl apply --context kind-cluster-b -f deploy-backend.yaml` | `kubectl get pods --context kind-cluster-b` → `Running` |
