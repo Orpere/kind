@@ -433,50 +433,21 @@ Cluster A will now show a `backend` service entry with backends pointing to **Cl
 
 ## Step 5 — Deploy an Ubuntu Debug Pod (with full network tools)
 
-We'll deploy a pod with **everything** needed for testing: `curl`, `nc`, `nslookup`, `dig`, `ping`, `tcpdump`.
-
-```yaml
-# ubuntu-debug.yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ubuntu-debug
-  namespace: default
-  labels:
-    app: ubuntu-debug
-spec:
-  containers:
-  - name: debug
-    image: ubuntu:24.04
-    command: ["sleep", "infinity"]
-    env:
-    - name: DEBIAN_FRONTEND
-      value: noninteractive
-```
+We'll deploy a **single self-contained manifest** (`ubuntu-debug.yaml`) that adds a `ubuntu-debug` pod to the test environment with **everything** needed for testing already installed in one go: `curl`, `nc`, `nslookup`, `dig`, `ping`, `tcpdump`, `nmap`, `traceroute`, `mtr`, `iperf3`, `socat`, `ethtool`, `conntrack`, `arping`, and more. No separate post-deploy install step is required.
 
 ```bash
-# Deploy the debug pod on Cluster A (the caller side)
+# Deploy the debug pod on Cluster A (the caller side) with one command
 kubectl apply --context kind-cluster-a -f ubuntu-debug.yaml
 
 # Wait for it to be Running
-kubectl wait --context kind-cluster-a --for=condition=Ready pod/ubuntu-debug --timeout=120s
-
-# Install network tools inside the pod
-kubectl exec --context kind-cluster-a -it ubuntu-debug -- bash -c "
-  apt-get update -qq && \
-  apt-get install -y -qq \
-    curl \
-    netcat-openbsd \
-    dnsutils \
-    iputils-ping \
-    net-tools \
-    tcpdump \
-    iptables \
-    2>&1 | tail -5
-"
+kubectl wait --context kind-cluster-a --for=condition=Ready pod/ubuntu-debug --timeout=300s
 ```
 
-**Note:** The first run will download packages (~100MB). Subsequent cluster recreations can use the cached layer if you pre-build a custom image.
+The pod installs its network tools automatically on first start (~100–200MB download). Once `Running`, all later tests run directly inside it:
+
+```bash
+kubectl exec --context kind-cluster-a -it ubuntu-debug -- bash
+```
 
 ---
 
@@ -677,7 +648,7 @@ flowchart LR
 | 12 | Deploy backend B | `kubectl apply --context kind-cluster-b -f deploy-backend.yaml` | `kubectl get pods --context kind-cluster-b` → `Running` |
 | 13 | Export service | `kubectl annotate service backend --context kind-cluster-b "cilium.io/global-service=true"` | `kubectl get ciliumserviceimport --context kind-cluster-a -A` → exists |
 | 14 | Deploy debug pod A | `kubectl apply --context kind-cluster-a -f ubuntu-debug.yaml` | `kubectl wait --for=condition=Ready pod/ubuntu-debug` |
-| 15 | Install tools | `apt-get install curl netcat-openbsd dnsutils iputils-ping` | Tools available in pod |
+| 15 | Install tools | Tools auto-installed by `ubuntu-debug.yaml` pod | Tools available in pod |
 | 16 | curl DNS name | `curl backend.default.svc.cluster.local:8080` | `Hello from Cluster B! 🎉` |
 | 17 | curl short name | `curl backend:8080` | `Hello from Cluster B! 🎉` |
 | 18 | nc raw TCP | `echo 'GET / HTTP/1.0' \| nc -w 3 backend 8080` | HTTP 200 response |

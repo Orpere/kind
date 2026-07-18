@@ -1,53 +1,14 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: debug
----
-apiVersion: apps/v1
-kind: Deployment
+kind: Pod
 metadata:
   name: ubuntu-debug
-  namespace: debug
+  namespace: default
   labels:
     app: ubuntu-debug
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ubuntu-debug
-  template:
-    metadata:
-      labels:
-        app: ubuntu-debug
-    spec:
-      containers:
-        - name: ubuntu-debug
-          image: ubuntu:24.04
-          command: ["sleep", "infinity"]
-          securityContext:
-            capabilities:
-              add:
-                - NET_ADMIN
-                - NET_RAW
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 250m
-              memory: 256Mi
----
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ubuntu-debug-tools
-  namespace: debug
-  labels:
-    app: ubuntu-debug-tools
-spec:
   restartPolicy: Never
   containers:
-    - name: ubuntu-debug-tools
+    - name: ubuntu-debug
       image: ubuntu:24.04
       command:
         - sh
