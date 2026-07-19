@@ -342,6 +342,15 @@ kubectl create secret generic cilium-ca -n kube-system \
   --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key --context kind-cluster-a
 kubectl create secret generic cilium-ca -n kube-system \
   --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key --context kind-cluster-b
+
+# Tag the secret so Helm (via --set tls.caSecretName=cilium-ca) can adopt it
+for ctx in kind-cluster-a kind-cluster-b; do
+  kubectl --context "$ctx" -n kube-system label secret cilium-ca \
+    app.kubernetes.io/managed-by=Helm --overwrite
+  kubectl --context "$ctx" -n kube-system annotate secret cilium-ca \
+    meta.helm.sh/release-name=cilium \
+    meta.helm.sh/release-namespace=kube-system --overwrite
+done
 ```
 
 Confirm both clusters hold the identical CA:
@@ -352,17 +361,36 @@ kubectl --context kind-cluster-b -n kube-system get secret cilium-ca -o jsonpath
 # The two fingerprints MUST be identical
 ```
 
-#### 🔗 Step 4 — Point Cilium at the shared CA at install time
+#### 🔗 Step 4 — Point Cilium at the shared CA at install time (v1.15+)
 
-The install commands (steps 0f/0g) already include these flags so Cilium uses your CA:
+> ⚠️ **Cilium v1.15 removed the old flags** `clustermesh.apiserver.tls.ca.cert` and
+> `clustermesh.apiserver.tls.ca.key` (deprecated since v1.14). If you pass them you get:
+> `execution error at (cilium/templates/validate.yaml:44:5): ... were deprecated in v1.14
+> and has been removed in v1.15`.
+>
+> **The fix:** pass the CA secret via the Helm value `--set tls.caSecretName=cilium-ca`
+> instead. `--ca-secret-name` was a legacy CLI flag that has since been removed and now
+> errors with `unknown flag: --ca-secret-name`. Cilium reads the CA from the
+> `cilium-ca` secret you created in Step 3, then auto-generates the per-cluster serving
+> certificates from this CA, and the clusters mutually authenticate over mTLS.
+
+The install commands (steps 0f/0g) already include this value so Cilium uses your CA:
 
 ```bash
---set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
---set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
+--set tls.caSecretName=cilium-ca
 ```
 
 Cilium then auto-generates the per-cluster serving certificates from this CA, and the
 clusters mutually authenticate over mTLS.
+
+> 🔁 **Alternative fix (recreate instead of adopt):** if you don't care about the current
+> contents of `cilium-ca` (e.g. it's left over from an old/broken install), delete it and
+> let the installer recreate it, then re-run `cilium install`:
+>
+> ```bash
+> kubectl --context kind-cluster-a -n kube-system delete secret cilium-ca
+> kubectl --context kind-cluster-b -n kube-system delete secret cilium-ca
+> ```
 
 ```mermaid
 flowchart TB
@@ -408,11 +436,10 @@ cilium install \
     --set hubble.enabled=true \
     --set hubble.relay.enabled=true \
     --set hubble.ui.enabled=true \
-    --set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
-    --set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
+    --set tls.caSecretName=cilium-ca
 ```
 
-> **Security:** the last two lines point Cilium at the **shared CA** created earlier (Phase/Step: single root of trust for mTLS). This is what authenticates and encrypts the mesh control/API traffic.
+> **Security:** the `tls.caSecretName` line points Cilium at the **shared CA** created earlier (Step 3 — single root of trust for mTLS). This is what authenticates and encrypts the mesh control/API traffic.
 > **WireGuard (optional):** both clusters run on the same local kind/Docker network, so mTLS alone is sufficient for this exercise. To add an extra data-plane encryption layer on untrusted networks, append `--enable-wireguard --wireguard-enabled` to the install command.
 
 Wait for Cilium to be ready:
@@ -442,11 +469,10 @@ cilium install \
     --set hubble.enabled=true \
     --set hubble.relay.enabled=true \
     --set hubble.ui.enabled=true \
-    --set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
-    --set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
+    --set tls.caSecretName=cilium-ca
 ```
 
-> **Security:** same shared-CA flags as Cluster A (mTLS). Optional `--enable-wireguard --wireguard-enabled` adds data-plane encryption (not required for this local kind exercise).
+> **Security:** same shared-CA value as Cluster A (mTLS). Optional `--enable-wireguard --wireguard-enabled` adds data-plane encryption (not required for this local kind exercise).
 
 ```bash
 cilium status --context kind-cluster-b --wait
@@ -732,6 +758,15 @@ kubectl create secret generic cilium-ca \
   --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key \
   --context kind-cluster-b
 
+# Tag the secret so Helm can adopt it
+for ctx in kind-cluster-a kind-cluster-b; do
+  kubectl --context "$ctx" -n kube-system label secret cilium-ca \
+    app.kubernetes.io/managed-by=Helm --overwrite
+  kubectl --context "$ctx" -n kube-system annotate secret cilium-ca \
+    meta.helm.sh/release-name=cilium \
+    meta.helm.sh/release-namespace=kube-system --overwrite
+done
+
 # Re-enable the mesh using the shared CA on both clusters
 cilium clustermesh enable --context kind-cluster-a --service-type NodePort
 cilium clustermesh enable --context kind-cluster-b --service-type NodePort
@@ -804,6 +839,15 @@ kubectl create secret generic cilium-ca -n kube-system \
 kubectl create secret generic cilium-ca -n kube-system \
   --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key \
   --context kind-cluster-b
+
+# Tag the secret so Helm can adopt it
+for ctx in kind-cluster-a kind-cluster-b; do
+  kubectl --context "$ctx" -n kube-system label secret cilium-ca \
+    app.kubernetes.io/managed-by=Helm --overwrite
+  kubectl --context "$ctx" -n kube-system annotate secret cilium-ca \
+    meta.helm.sh/release-name=cilium \
+    meta.helm.sh/release-namespace=kube-system --overwrite
+done
 ```
 
 Then enable the mesh as `ClusterIP` on both (no public exposure):
@@ -1171,8 +1215,8 @@ flowchart LR
 | 3 | Nodes ready | `kubectl get nodes --context kind-cluster-a` | All `Ready` |
 | 4 | Create shared CA (mTLS root) | `openssl ...` + `kubectl create secret cilium-ca` on both | Both clusters share the same `cilium-ca` secret |
 | 5 | Assign cluster IDs | `--set cluster.id=1` on A, `--set cluster.id=2` on B (or `cilium config set`) | `cilium config view` shows unique IDs |
-| 6 | Install Cilium A | `cilium install --context kind-cluster-a --set cluster.id=1 ... --set clustermesh.apiserver.tls.ca.*` | `cilium status --context kind-cluster-a --wait` → `OK` |
-| 7 | Install Cilium B | `cilium install --context kind-cluster-b --set cluster.id=2 ... --set clustermesh.apiserver.tls.ca.*` | `cilium status --context kind-cluster-b --wait` → `OK` |
+| 6 | Install Cilium A | `cilium install --context kind-cluster-a --set cluster.id=1 ... --set tls.caSecretName=cilium-ca` | `cilium status --context kind-cluster-a --wait` → `OK` |
+| 7 | Install Cilium B | `cilium install --context kind-cluster-b --set cluster.id=2 ... --set tls.caSecretName=cilium-ca` | `cilium status --context kind-cluster-b --wait` → `OK` |
 | 7 | Connectivity test | `cilium connectivity test --context kind-cluster-a` | All checks pass |
 | 8 | Enable mesh A | `cilium clustermesh enable --context kind-cluster-a --service-type <NodePort\|LoadBalancer\|ClusterIP>` | `cilium clustermesh status` shows enabled |
 | 9 | Enable mesh B | `cilium clustermesh enable --context kind-cluster-b --service-type <NodePort\|LoadBalancer\|ClusterIP>` | `cilium clustermesh status` shows enabled |

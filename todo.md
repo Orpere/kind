@@ -151,6 +151,17 @@ kubectl create secret generic cilium-ca -n kube-system \
   --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key --context kind-cluster-a
 kubectl create secret generic cilium-ca -n kube-system \
   --from-file=ca.crt=ca.crt --from-file=ca.key=ca.key --context kind-cluster-b
+
+# 3. Tag the secret so Helm (via --ca-secret-name) can adopt it.
+#    Without these labels/annotations, `cilium install --ca-secret-name cilium-ca`
+#    fails with: "Secret cilium-ca exists ... missing key app.kubernetes.io/managed-by ..."
+for ctx in kind-cluster-a kind-cluster-b; do
+  kubectl --context "$ctx" -n kube-system label secret cilium-ca \
+    app.kubernetes.io/managed-by=Helm --overwrite
+  kubectl --context "$ctx" -n kube-system annotate secret cilium-ca \
+    meta.helm.sh/release-name=cilium \
+    meta.helm.sh/release-namespace=kube-system --overwrite
+done
 ```
 
 ### 🛠️ Step2 — Verify the CA looks correct (optional but recommended)
@@ -168,17 +179,38 @@ kubectl --context kind-cluster-b -n kube-system get secret cilium-ca -o jsonpath
 # The two fingerprints MUST match
 ```
 
-### 🔗 Step4 — Point Cilium at the shared CA at install time
+### 🔗 Step4 — Hand the shared CA to Cilium (v1.15+)
 
-The Phase 3 install commands include these flags so Cilium uses your CA:
+> ⚠️ **Cilium v1.15 removed the old flags** `clustermesh.apiserver.tls.ca.cert` and
+> `clustermesh.apiserver.tls.ca.key` (deprecated since v1.14). If you pass them you get:
+> `execution error at (cilium/templates/validate.yaml:44:5): ... were deprecated in v1.14
+> and has been removed in v1.15`.
+>
+> **The fix:** do **not** pass those flags. Instead, install Cilium with the Helm value
+> `--set tls.caSecretName=cilium-ca` (or mount the `cilium-ca` secret yourself). Note that
+> the legacy CLI flag `--ca-secret-name` has been removed and now errors with
+> `unknown flag: --ca-secret-name`, so use the Helm value form instead. Cilium
+> reads the CA from the `cilium-ca` secret you created in Step1, then auto-generates the
+> per-cluster serving certificates from this CA, and the clusters mutually authenticate
+> over mTLS.
+>
+> ⚠️ **Helm ownership gotcha:** because you created `cilium-ca` manually (not via Helm),
+> `cilium install` with `--set tls.caSecretName=cilium-ca` will refuse to adopt it unless the secret
+> carries the Helm ownership labels/annotations. Step1 already tags it with
+> `app.kubernetes.io/managed-by=Helm`, `meta.helm.sh/release-name=cilium`, and
+> `meta.helm.sh/release-namespace=kube-system` so Helm can import it cleanly.
+>
+> 🔁 **Alternative fix:** if you don't care about the current contents of `cilium-ca`
+> (e.g. it's left over from an old/broken install), just delete it and let the installer
+> recreate it, then re-run `cilium install`:
+>
+> ```bash
+> kubectl --context kind-cluster-a -n kube-system delete secret cilium-ca
+> kubectl --context kind-cluster-b -n kube-system delete secret cilium-ca
+> ```
 
-```bash
---set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
---set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
-```
-
-Cilium then auto-generates the per-cluster serving certificates from this CA, and the
-clusters mutually authenticate over mTLS.
+The Phase 3 install commands below already point Cilium at the shared CA secret — no
+deprecated flags are used.
 
 ```mermaid
 flowchart LR
@@ -212,15 +244,15 @@ Now we install Cilium on both clusters. We tell it to:
 ```bash
 # Cluster A
 cilium install --context kind-cluster-a \
-  --cluster-id 1 --cluster-name cluster-a \
-  --set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
-  --set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
+  --cluster-name cluster-a \
+  --set cluster.id=1 \
+  --set tls.caSecretName=cilium-ca
 
 # Cluster B
 cilium install --context kind-cluster-b \
-  --cluster-id 2 --cluster-name cluster-b \
-  --set clustermesh.apiserver.tls.ca.cert=/var/lib/cilium-ca/ca.crt \
-  --set clustermesh.apiserver.tls.ca.key=/var/lib/cilium-ca/ca.key
+  --cluster-name cluster-b \
+  --set cluster.id=2 \
+  --set tls.caSecretName=cilium-ca
 ```
 
 **If you also want WireGuard (extra encryption on untrusted networks):** add
@@ -369,6 +401,8 @@ kind get clusters | xargs -I {} kind delete cluster --name {}
 | 🔌 No LoadBalancer on kind | Local kind has no cloud LB | Use **NodePort** (Phase 4) — no MetalLB needed |
 | 🔐 Want extra encryption on untrusted networks | mTLS only covers control plane | Optionally add `--enable-wireguard` at install (Phase 3) |
 | 🚫 Connection point exposed publicly | Misconfigured service type | Keep it local (NodePort/ClusterIP); never public |
+| ⛔ `clustermesh.apiserver.tls.ca.cert/key` removed in v1.15 | Old deprecated Helm flags passed at install | Use `--set tls.caSecretName=cilium-ca` instead of the removed flags (the `--ca-secret-name` CLI flag was also removed and now errors with `unknown flag`) |
+| ⛔ `Secret "cilium-ca" ... cannot be imported ... missing key "app.kubernetes.io/managed-by"` | CA secret created manually without Helm metadata | **Option 1 (adopt):** tag secret with Helm labels/annotations (`managed-by=Helm`, `release-name=cilium`, `release-namespace=kube-system`) before `cilium install`. **Option 2 (recreate):** if you don't need the current secret contents, `kubectl -n kube-system delete secret cilium-ca` on the affected cluster and re-run the install |
 
 > **Bottom line for this kind exercise:** Two local clusters, one shared digital identity
 > (mTLS), one private local network. Traffic is **encrypted and mutually verified** by
