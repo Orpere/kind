@@ -6,6 +6,26 @@
 
 ---
 
+## ⚡ Quick Start (one command)
+
+Everything in this guide is automated by `build-clustermesh.sh`. From this directory:
+
+```bash
+./build-clustermesh.sh
+```
+
+It builds both kind clusters, installs Cilium with the full feature set (Hubble Relay
++ UI, metrics, mTLS via the shared CA), connects them with ClusterMesh, deploys the
+global `backend` service, and runs an end-to-end cross-cluster test (`curl backend:8080`
+→ `Hello from Cluster B! 🎉`). It cleans up its temporary test pod when finished.
+
+> 📝 **Manual walkthrough:** the rest of this document explains every step by hand.
+> The cross-cluster test in the script uses `curlimages/curl` (a prebuilt image) instead
+> of `ubuntu-debug.yaml`, because `ubuntu-debug.yaml` installs tools via `apt-get`, which
+> requires the pod to have outbound internet access.
+
+---
+
 ## 🧠 What is Cilium Cluster Mesh? (For non-technical people)
 
 Imagine you have **two separate cities** (clusters), each with their own buildings (pods) and roads (network). Normally, nothing can cross between cities — a building in City A cannot call a building in City B.
@@ -966,35 +986,53 @@ spec:
 kubectl apply --context kind-cluster-b -f deploy-backend.yaml
 ```
 
+> ⚠️ **Critical:** Cilium's global service feature only syncs **endpoints** across
+> clusters — it does **not** create the `Service` object on the remote side. You must
+> also create the **identical** `Service` in `cluster-a` (no Deployment needed there).
+
+### 3b-ii. Apply the SAME Service to Cluster A
+
+> Use the Service-only manifest (`deploy-backend-service.yaml`) so we do **not** spin
+> up local backend pods in `cluster-a` — Cilium fills the endpoints from `cluster-b`.
+
+```bash
+kubectl apply --context kind-cluster-a -f deploy-backend-service.yaml
+```
+
 ### 3c. Verify the deployment and service
 
 ```bash
 kubectl get pods --context kind-cluster-b -l app=backend
 kubectl get svc --context kind-cluster-b backend
+kubectl get svc --context kind-cluster-a backend
 kubectl describe svc --context kind-cluster-b backend
 ```
 
-**Expected output:** 2 pods `Running`, service `backend` with ClusterIP `10.3.x.x`.
+**Expected output:** 2 pods `Running` in Cluster B, and the `backend` service present in **both** clusters.
 
 ---
 
 ## Step 4 — Export the Service to the Cluster Mesh
 
-### 4a. Annotate the service as globally visible
+### 4a. Annotate the service as globally visible (on BOTH clusters)
 
 ```bash
-kubectl annotate service backend --context kind-cluster-b "cilium.io/global-service=true"
+kubectl annotate service backend --context kind-cluster-b "service.cilium.io/global=true"
+kubectl annotate service backend --context kind-cluster-a "service.cilium.io/global=true"
 ```
 
 ### 4b. Verify the export was registered
 
 ```bash
-kubectl get ciliumserviceexport --context kind-cluster-b -A
-kubectl get ciliumserviceimport --context kind-cluster-a -A
-kubectl get ciliumserviceimport --context kind-cluster-b -A
+# The global service endpoints are synced into cluster-a's Endpoints object:
+kubectl get endpoints backend --context kind-cluster-a
+# Expect Cluster B's pod IPs (e.g. 10.2.x.x:8080) listed here.
 ```
 
-**Expected output:** A `CiliumServiceExport` exists on Cluster B, and a matching `CiliumServiceImport` exists on **both** clusters.
+> 📝 **Note:** In Cilium 1.19 the `CiliumServiceExport` / `CiliumServiceImport` CRDs are
+> **not** installed by default (the MCS API CRDs are separate from Cilium's global
+> service sync). Verify the working global service via the synced `Endpoints` above
+> rather than `kubectl get ciliumserviceimport` (which returns "no resource type").
 
 ### 4c. (Alternative) Confirm via Cilium CLI
 
@@ -1009,7 +1047,12 @@ Cluster A will now show a `backend` service entry with backends pointing to **Cl
 
 ## Step 5 — Deploy an Ubuntu Debug Pod (with full network tools)
 
-We'll deploy a **single self-contained manifest** (`ubuntu-debug.yaml`) that adds a `ubuntu-debug` pod to the test environment with **everything** needed for testing already installed in one go: `curl`, `nc`, `nslookup`, `dig`, `ping`, `tcpdump`, `nmap`, `traceroute`, `mtr`, `iperf3`, `socat`, `ethtool`, `conntrack`, `arping`, and more. No separate post-deploy install step is required.
+We'll deploy a **single self-contained manifest** (`ubuntu-debug.yaml`) that adds a `ubuntu-debug` pod to the test environment with **everything** needed for testing: `curl`, `nc`, `nslookup`, `dig`, `ping`, `tcpdump`, `nmap`, `traceroute`, `mtr`, `iperf3`, `socat`, `ethtool`, `conntrack`, `arping`, and more.
+
+> ⚠️ **Requires outbound internet from pods.** `ubuntu-debug.yaml` installs tools via
+> `apt-get`, which only works where the pod can reach the package mirror. On networks
+> without pod egress, use the prebuilt `curlimages/curl` image instead (this is what
+> `build-clustermesh.sh` does for its automated test).
 
 ```bash
 # Deploy the debug pod on Cluster A (the caller side) with one command
@@ -1095,10 +1138,12 @@ kubectl exec --context kind-cluster-a -it ubuntu-debug -- curl -s --connect-time
 Now **temporarily disable the mesh** and confirm it breaks:
 
 ```bash
-# Disconnect the mesh momentarily to prove cross-cluster routing is real
-cilium clustermesh disconnect --context kind-cluster-a
+# Disconnect the mesh momentarily to prove cross-cluster routing is real.
+# NOTE: --destination-context is REQUIRED, otherwise it errors with
+#   "no destination context specified, use --destination-context to specify which cluster to disconnect from"
+cilium clustermesh disconnect --context kind-cluster-a --destination-context kind-cluster-b
 
-# Now try again — should FAIL
+# Now try again — should FAIL (allow ~30-60s for the global-service endpoints to be withdrawn)
 kubectl exec --context kind-cluster-a -it ubuntu-debug -- curl -s --connect-timeout 5 http://backend:8080
 ```
 
@@ -1223,9 +1268,10 @@ flowchart LR
 | 10 | Connect clusters | `cilium clustermesh connect --context kind-cluster-a --destination-context kind-cluster-b` | `cilium clustermesh status` → `Connected` on both |
 | 11 | Remote nodes seen | `kubectl get ciliumnode --context kind-cluster-a` | Shows node from both clusters |
 | 12 | Deploy backend B | `kubectl apply --context kind-cluster-b -f deploy-backend.yaml` | `kubectl get pods --context kind-cluster-b` → `Running` |
-| 13 | Export service | `kubectl annotate service backend --context kind-cluster-b "cilium.io/global-service=true"` | `kubectl get ciliumserviceimport --context kind-cluster-a -A` → exists |
-| 14 | Deploy debug pod A | `kubectl apply --context kind-cluster-a -f ubuntu-debug.yaml` | `kubectl wait --for=condition=Ready pod/ubuntu-debug` |
-| 15 | Install tools | Tools auto-installed by `ubuntu-debug.yaml` pod | Tools available in pod |
+| 12b | Deploy SAME service A | `kubectl apply --context kind-cluster-a -f deploy-backend-service.yaml` | `kubectl get svc --context kind-cluster-a backend` → exists (no local pods needed) |
+| 13 | Export service | `kubectl annotate service backend --context kind-cluster-b "service.cilium.io/global=true"` AND `--context kind-cluster-a` | `kubectl get endpoints backend --context kind-cluster-a` → lists Cluster B pod IPs |
+| 14 | Deploy debug pod A | `kubectl apply --context kind-cluster-a -f ubuntu-debug.yaml` (or use `curlimages/curl` if pods lack egress) | `kubectl wait --for=condition=Ready pod/ubuntu-debug` |
+| 15 | Install tools | Tools installed by `ubuntu-debug.yaml` (needs pod internet egress) | Tools available in pod |
 | 16 | curl DNS name | `curl backend.default.svc.cluster.local:8080` | `Hello from Cluster B! 🎉` |
 | 17 | curl short name | `curl backend:8080` | `Hello from Cluster B! 🎉` |
 | 18 | nc raw TCP | `echo 'GET / HTTP/1.0' \| nc -w 3 backend 8080` | HTTP 200 response |
@@ -1233,7 +1279,7 @@ flowchart LR
 | 20 | DNS resolve | `nslookup backend.default.svc.cluster.local` | ClusterIP returned |
 | 21 | dig short | `dig backend.default.svc.cluster.local +short` | ClusterIP returned |
 | 22 | Hubble visual | Port-forward → browser | Flow visible in UI |
-| 23 | Disconnect test | `cilium clustermesh disconnect --context kind-cluster-a` | curl → **fails** |
+| 23 | Disconnect test | `cilium clustermesh disconnect --context kind-cluster-a --destination-context kind-cluster-b` | curl → **fails** (after ~30-60s for endpoints to be withdrawn) |
 | 24 | Reconnect test | `cilium clustermesh connect ...` | curl → **works again** |
 
 ---
@@ -1244,11 +1290,12 @@ flowchart LR
 # Remove the debug pod
 kubectl delete pod --context kind-cluster-a ubuntu-debug
 
-# Remove the backend deployment and service
+# Remove the backend deployment and service (both clusters)
 kubectl delete -f deploy-backend.yaml --context kind-cluster-b 2>/dev/null
+kubectl delete -f deploy-backend.yaml --context kind-cluster-a 2>/dev/null
 
-# Disconnect the mesh
-cilium clustermesh disconnect --context kind-cluster-a 2>/dev/null
+# Disconnect the mesh (--destination-context is REQUIRED)
+cilium clustermesh disconnect --context kind-cluster-a --destination-context kind-cluster-b 2>/dev/null
 
 # Disable the mesh on both clusters
 cilium clustermesh disable --context kind-cluster-a 2>/dev/null
@@ -1274,7 +1321,7 @@ graph TB
     CONNECT["🔗 Connect the clusters<br/>cilium clustermesh connect"]
     VERIFY_CONN["👀 Verify connection<br/>cilium clustermesh status → Connected"]
     DEPLOY["📦 Deploy backend on B"]
-    EXPORT["🌍 Export service as Global<br/>cilium.io/global-service=true"]
+    EXPORT["🌍 Export service as Global<br/>service.cilium.io/global=true"]
     DEPLOY_DEBUG["🐧 Deploy Ubuntu debug pod on A<br/>+ install curl nc dnsutils"]
     TEST["🧪 Test: curl, nc, nslookup, dig<br/>across the mesh"]
     HUBBLE["🔭 Observe with Hubble UI"]

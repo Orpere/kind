@@ -25,6 +25,14 @@
 > - **MetalLB is NOT required.** On kind, the simplest exposure is `NodePort`, which
 >   works with zero extra components. MetalLB is only needed if you specifically want a
 >   stable LoadBalancer IP (Option B).
+>
+> **⚡ One-command run:** `./build-clustermesh.sh` builds both clusters, installs Cilium
+> with the full feature set, connects the mesh, deploys the global `backend` service, and
+> runs the cross-cluster test automatically. The rest of this document is the manual
+> walkthrough. File reference: `deploy-backend.yaml` (backend + global Service for
+> cluster-b), `deploy-backend-service.yaml` (Service-only for cluster-a),
+> `kind-bpf-a.yaml` / `kind-bpf-b.yaml` (cluster definitions), `ubuntu-debug.yaml`
+> (manual debug pod — needs pod internet egress).
 
 ---
 
@@ -319,22 +327,47 @@ You should see nodes from **both** clusters listed — proof the link is live.
 
 We make a backend application in `cluster-b` available to `cluster-a` by tagging it as a "global service."
 
+> ⚠️ **Critical:** Cilium's global service feature only syncs **endpoints** across clusters —
+> it does **not** create the `Service` object on the remote side. You must deploy the
+> **identical** `Service` (same name, namespace, ports) in **both** clusters and annotate
+> **both** with `service.cilium.io/global=true`. If you only create it in `cluster-b`, the
+> `backend` name will not resolve in `cluster-a` (curl fails with "Could not resolve host").
+> Do **not** run a backend Deployment in `cluster-a` — only the Service object is needed
+> there; Cilium fills its endpoints from the mesh.
+>
+> 📝 **Annotation key:** use `service.cilium.io/global` (the older `cilium.io/global-service`
+> key is deprecated and silently ignored — a global service annotated with the wrong key
+> will never be synced across the mesh).
+
 ```bash
+# 1. The real backend lives in cluster-b (Deployment + Service, already global-annotated)
 kubectl apply --context kind-cluster-b -f deploy-backend.yaml
-kubectl annotate service backend --context kind-cluster-b "cilium.io/global-service=true"
+kubectl annotate service backend --context kind-cluster-b "service.cilium.io/global=true" --overwrite
+
+# 2. Create the SAME Service object in cluster-a (no Deployment needed there —
+#    use the Service-only manifest so we don't spin up local pods in cluster-a)
+kubectl apply --context kind-cluster-a -f deploy-backend-service.yaml
+kubectl annotate service backend --context kind-cluster-a "service.cilium.io/global=true" --overwrite
 ```
 
-> ✅ **Check:** `kubectl get ciliumserviceimport --context kind-cluster-a -A` shows the imported service.
+> ✅ **Check:** `kubectl get endpoints backend --context kind-cluster-a` now lists the
+> `cluster-b` pod IPs (e.g. `10.2.x.x:8080`). This confirms the global service is working.
+> (The old `kubectl get ciliumserviceimport` command no longer applies in Cilium 1.19 —
+> that CRD was removed; verify via the synced Endpoints instead.)
 
 ---
 
 ## 🧪 Phase 8 — Test the Connection
 
-Deploy a test pod in `cluster-a` and ask for the backend by its simple name.
+Deploy a test pod in `cluster-a` and ask for the backend by its simple name. Use the
+prebuilt `curlimages/curl` image so the test does not depend on pod internet egress
+(`ubuntu-debug.yaml` installs tools via `apt-get` and needs outbound access).
 
 ```bash
-kubectl apply --context kind-cluster-a -f ubuntu-debug.yaml
-kubectl exec --context kind-cluster-a -it ubuntu-debug -- curl backend:8080
+kubectl run mesh-test --context kind-cluster-a --image=curlimages/curl:latest \
+  --restart=Never --command -- sh -c 'sleep 3600'
+kubectl exec --context kind-cluster-a mesh-test -- curl -s --max-time 15 backend:8080
+kubectl delete pod mesh-test --context kind-cluster-a --ignore-not-found
 ```
 
 > ✅ **Expected:** `Hello from Cluster B! 🎉` — the request traveled securely across the mesh.
@@ -349,7 +382,7 @@ Confirm our three promises are actually delivered:
 
 - 🪪 **mTLS working:** both clusters use the same `cilium-ca` secret (the shared CA from Phase 2). This encrypts + authenticates the mesh control/API traffic.
 - 🔐 **WireGuard (if enabled):** `cilium config view --context kind-cluster-a | grep -i wireguard` shows enabled. (Skipped in the mTLS-only variant.)
-- 👁️ **Visibility:** `hubble observe --from-pod default/ubuntu-debug` shows the cross-cluster flow.
+- 👁️ **Visibility:** `hubble observe --from-pod default/mesh-test` shows the cross-cluster flow.
 
 ```mermaid
 flowchart TB
@@ -372,9 +405,15 @@ flowchart TB
 Prove the connection is real and recoverable:
 
 ```bash
-cilium clustermesh disconnect --context kind-cluster-a   # curl now FAILS
-cilium clustermesh connect   --context kind-cluster-a --destination-context kind-cluster-b  # curl works again
+# disconnect REQUIRES --destination-context, otherwise it errors:
+#   "no destination context specified, use --destination-context to specify which cluster to disconnect from"
+cilium clustermesh disconnect --context kind-cluster-a --destination-context kind-cluster-b   # curl (eventually) FAILS
+cilium clustermesh connect   --context kind-cluster-a --destination-context kind-cluster-b   # curl works again
 ```
+
+> 💡 After `disconnect`, in-flight/cached endpoints may still answer for a short grace
+> period; give it ~30–60s for the global-service endpoints to be withdrawn before the
+> curl fails. Reconnect restores them immediately.
 
 ---
 
@@ -385,7 +424,8 @@ When finished, remove everything safely:
 ```bash
 kubectl delete pod --context kind-cluster-a ubuntu-debug
 kubectl delete -f deploy-backend.yaml --context kind-cluster-b 2>/dev/null
-cilium clustermesh disconnect --context kind-cluster-a 2>/dev/null
+kubectl delete -f deploy-backend.yaml --context kind-cluster-a 2>/dev/null
+cilium clustermesh disconnect --context kind-cluster-a --destination-context kind-cluster-b 2>/dev/null
 cilium clustermesh disable --context kind-cluster-a 2>/dev/null
 cilium clustermesh disable --context kind-cluster-b 2>/dev/null
 kind get clusters | xargs -I {} kind delete cluster --name {}
@@ -403,6 +443,10 @@ kind get clusters | xargs -I {} kind delete cluster --name {}
 | 🚫 Connection point exposed publicly | Misconfigured service type | Keep it local (NodePort/ClusterIP); never public |
 | ⛔ `clustermesh.apiserver.tls.ca.cert/key` removed in v1.15 | Old deprecated Helm flags passed at install | Use `--set tls.caSecretName=cilium-ca` instead of the removed flags (the `--ca-secret-name` CLI flag was also removed and now errors with `unknown flag`) |
 | ⛔ `Secret "cilium-ca" ... cannot be imported ... missing key "app.kubernetes.io/managed-by"` | CA secret created manually without Helm metadata | **Option 1 (adopt):** tag secret with Helm labels/annotations (`managed-by=Helm`, `release-name=cilium`, `release-namespace=kube-system`) before `cilium install`. **Option 2 (recreate):** if you don't need the current secret contents, `kubectl -n kube-system delete secret cilium-ca` on the affected cluster and re-run the install |
+| 🚫 `backend` does not resolve in cluster-a (`Could not resolve host`) | Cilium global services only sync **endpoints**, not the `Service` object — the guide only created the Service in cluster-b | Deploy the **identical** `Service` (same name/namespace/ports) in **both** clusters and annotate **both** with `service.cilium.io/global=true`. No Deployment needed in cluster-a; Cilium fills endpoints from the mesh |
+| 🚫 Global service silently not synced | Used the deprecated `cilium.io/global-service=true` annotation key | Use the current key `service.cilium.io/global=true` (the old key is ignored by Cilium 1.19) |
+| ⛔ `Unable to disconnect clusters: no destination context specified` | `clustermesh disconnect` requires an explicit peer | Use `cilium clustermesh disconnect --context <src> --destination-context <dst>` (matching the `connect` form) |
+| ⚠️ `kubectl get ciliumserviceimport` returns "no resource type" | That CRD was removed in Cilium 1.19 | Verify global-service sharing with `kubectl get endpoints backend --context <src>` — it should list the remote cluster's pod IPs |
 
 > **Bottom line for this kind exercise:** Two local clusters, one shared digital identity
 > (mTLS), one private local network. Traffic is **encrypted and mutually verified** by

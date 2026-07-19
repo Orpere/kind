@@ -1,0 +1,20 @@
+# deploy-backend-service.yaml
+# Service-only manifest for the "global service" remote side (cluster-a).
+# Cilium's global service feature syncs endpoints across clusters but does NOT
+# create the Service object remotely, so the identical Service must exist in both
+# clusters. No Deployment is included here on purpose — Cilium fills the endpoints
+# from cluster-b's backend pods over the ClusterMesh.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: default
+  annotations:
+    # Must match the global annotation on the source service in cluster-b.
+    service.cilium.io/global: "true"
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8080
+      targetPort: 8080

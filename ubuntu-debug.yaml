@@ -14,13 +14,18 @@ spec:
         - sh
         - -c
         - |
-          apt-get update &&
-          apt-get install -y --no-install-recommends \
+          set +e
+          for i in 1 2 3; do
+            apt-get update && break
+            echo "apt-get update failed, retrying ($i)..."
+            sleep 3
+          done
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             iproute2 iputils-ping curl wget dnsutils net-tools \
             tcpdump nmap traceroute mtr iperf3 telnet socat \
             ethtool bridge-utils iptables conntrack arping \
-            openssh-client vim less bash-completion ca-certificates &&
-          echo "All network tools installed. Sleeping..." &&
+            openssh-client vim less bash-completion ca-certificates
+          echo "Network tools install attempted. Sleeping..."
           sleep infinity
       securityContext:
         capabilities:

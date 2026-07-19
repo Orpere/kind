@@ -28,6 +28,11 @@ kind: Service
 metadata:
   name: backend
   namespace: default
+  annotations:
+    # Cilium Global Service annotation — makes this service reachable across the
+    # ClusterMesh. NOTE: the correct key is `service.cilium.io/global` (the older
+    # `cilium.io/global-service` key is deprecated and silently ignored).
+    service.cilium.io/global: "true"
 spec:
   selector:
     app: backend
