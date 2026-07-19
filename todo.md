@@ -244,13 +244,13 @@ Now we install Cilium on both clusters. We tell it to:
 ```bash
 # Cluster A
 cilium install --context kind-cluster-a \
-  --cluster-name cluster-a \
+  --set cluster.name=cluster-a \
   --set cluster.id=1 \
   --set tls.caSecretName=cilium-ca
 
 # Cluster B
 cilium install --context kind-cluster-b \
-  --cluster-name cluster-b \
+  --set cluster.name=cluster-b \
   --set cluster.id=2 \
   --set tls.caSecretName=cilium-ca
 ```
