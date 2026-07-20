@@ -138,8 +138,19 @@ kubectl apply --context "$CTX_B" -f "$SCRIPT_DIR/deploy-backend.yaml"
 # mesh, it does NOT create the Service remotely, so it must exist on both sides.
 kubectl apply --context "$CTX_A" -f "$SCRIPT_DIR/deploy-backend-service.yaml"
 kubectl wait --context "$CTX_B" --for=condition=Available deployment/backend --timeout=180s
-# Wait for remote endpoints to sync into cluster-a.
-sleep 25
+# Wait for remote endpoints to sync into cluster-a. Poll the EndpointSlice instead of
+# a fixed sleep: under load the Cilium endpoint sync can take well over 25s.
+echo -n "  waiting for cluster-b backend endpoints to sync into cluster-a"
+for i in $(seq 1 60); do
+  if kubectl get endpointslices -l kubernetes.io/service-name=backend \
+      --context "$CTX_A" -o jsonpath='{.items[0].endpoints}' 2>/dev/null \
+      | grep -q 'addresses'; then
+    echo " done"
+    break
+  fi
+  sleep 5
+  echo -n "."
+done
 ok "global service deployed"
 
 # ----------------------------------------------------------------------------

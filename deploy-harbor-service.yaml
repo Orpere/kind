@@ -1,0 +1,20 @@
+# deploy-harbor-service.yaml
+# Service-only manifest for the "harbor" global service on cluster-b.
+# Cilium's global service feature syncs endpoints across clusters but does NOT create
+# the Service object remotely, so the identical Service must exist in both clusters.
+# No Deployment is included here on purpose — Cilium fills the endpoints from cluster-a's
+# Harbor registry pods over the ClusterMesh.
+apiVersion: v1
+kind: Service
+metadata:
+  name: harbor
+  namespace: default
+  annotations:
+    service.cilium.io/global: "true"
+spec:
+  selector:
+    app: harbor
+  ports:
+    - name: registry
+      port: 5000
+      targetPort: 5000

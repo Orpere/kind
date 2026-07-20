@@ -1,0 +1,47 @@
+# deploy-harbor.yaml
+# Harbor registry component deployed on cluster-a, exposed as a Cilium Global Service
+# so it is reachable from cluster-b by its local DNS name.
+#
+# We use the upstream OCI "distribution" registry image (registry:2) — the exact same
+# software that powers Harbor's registry component — because the goharbor/* images are
+# designed to be run by the Helm chart with external config and do not start as a single
+# standalone container. This gives a real, running registry on :5000 that demonstrates
+# sharing an application across the ClusterMesh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harbor
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: harbor
+  template:
+    metadata:
+      labels:
+        app: harbor
+    spec:
+      containers:
+        - name: harbor-registry
+          image: registry:2
+          ports:
+            - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harbor
+  namespace: default
+  annotations:
+    # Cilium Global Service annotation — makes "harbor" reachable across the ClusterMesh.
+    # The correct key is service.cilium.io/global (the older cilium.io/global-service is
+    # deprecated and silently ignored).
+    service.cilium.io/global: "true"
+spec:
+  selector:
+    app: harbor
+  ports:
+    - name: registry
+      port: 5000
+      targetPort: 5000
