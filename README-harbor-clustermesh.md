@@ -16,9 +16,9 @@ in A and the *client* lives in B.
 
 | Object | Cluster | Purpose |
 |--------|---------|---------|
-| `harbor` Deployment + Service (`global`) | cluster-a | The shared Harbor application (portal on :80) |
+| `harbor` Deployment + Service (`global`) | cluster-a | The shared Harbor registry (`registry:2` on :5000) |
 | `harbor` Service (`global`) | cluster-b | Remote endpoint merge target — `harbor` resolves locally |
-| `ubuntu` pod | cluster-b | Client that reaches `harbor` via cluster DNS |
+| `harbor-client` pod (`curlimages/curl`) | cluster-b | Client that reaches `harbor` via cluster DNS |
 
 ---
 
@@ -135,27 +135,22 @@ stays `<none>` — Cilium programs the remote Harbor endpoints into its own data
 rather than the Kubernetes Endpoints API. The real proof is the DNS lookup + HTTP
 request below, not `kubectl get endpoints`.
 
-### 3. Run an Ubuntu client on cluster-b
+### 3. Run a curl client on cluster-b
+
+Use the prebuilt `curlimages/curl` pod (no internet egress needed — `ubuntu-debug.yaml`
+relies on `apt-get` to install curl and fails when pods have no outbound internet):
 
 ```bash
-kubectl apply --context kind-cluster-b -f ubuntu-debug.yaml
-kubectl wait --context kind-cluster-b --for=condition=Ready pod/ubuntu-debug --timeout=300s
+kubectl apply --context kind-cluster-b -f deploy-harbor-client.yaml
+kubectl wait --context kind-cluster-b --for=condition=Ready pod/harbor-client --timeout=120s
 ```
-
-> ⚠️ `ubuntu-debug.yaml` installs tools via `apt-get`, which needs pod internet egress.
-> If pods cannot reach the package mirror, use a prebuilt image instead:
-> `kubectl run ubuntu-debug --context kind-cluster-b --image=ubuntu:24.04 --restart=Never -- sleep 3600`
-> then `kubectl exec` in and `apt-get update && apt-get install -y curl`.
 
 ### 4. Reach Harbor via local DNS from cluster-b
 
-The OCI registry serves its v2 API on port `5000`. Use a client that has `curl`
-(`curlimages/curl` if the `ubuntu-debug` pod has no internet egress for `apt-get`):
+The OCI registry serves its v2 API on port `5000`. From a pod **inside** cluster-b the
+`harbor` name resolves locally and is routed across the mesh to cluster-a:
 
 ```bash
-# Preferred: prebuilt curl image (no egress needed)
-kubectl run harbor-client --context kind-cluster-b --image=curlimages/curl:latest \
-  --restart=Never --command -- sh -c 'sleep 3600'
 kubectl exec --context kind-cluster-b harbor-client -- \
   curl -s --max-time 20 http://harbor:5000/v2/
 ```
@@ -173,6 +168,45 @@ kubectl exec --context kind-cluster-b harbor-client -- \
 # Raw HTTP status
 kubectl exec --context kind-cluster-b harbor-client -- \
   curl -s -o /dev/null -w "%{http_code}\n" --max-time 20 http://harbor:5000/v2/
+```
+
+---
+
+## Accessing Harbor from outside the clusters (port-forward)
+
+There are two different access paths and they behave differently because of how Cilium
+syncs a Global Service:
+
+| You want to… | Works? | How |
+|--------------|--------|-----|
+| Reach `harbor` **from a pod in cluster-b** | ✅ | `curl http://harbor:5000/v2/` (step 4 above) — Cilium eBPF routes to cluster-a |
+| `kubectl port-forward` the **service in cluster-a** → laptop | ✅ | `kubectl port-forward --context kind-cluster-a svc/harbor 5000:5000` then `curl localhost:5000/v2/` |
+| `kubectl port-forward` the **service in cluster-b** → laptop | ❌ | The `harbor` Service in B has **no local endpoints** (its backends live in A, programmed by Cilium's eBPF datapath, not kube-proxy). `port-forward` selects a local endpoint and fails with `connection refused`. |
+
+> ⚠️ **Why port-forward on cluster-b fails:** a Global Service only syncs *endpoints*,
+> not the Service or its local EndpointObjects. In cluster-b `kubectl get endpoints harbor`
+> shows `<none>`, so `kubectl port-forward svc/harbor` (cluster-b) has nothing local to
+> forward to. To reach Harbor from your laptop, port-forward in **cluster-a** (where the
+> pod actually runs), or use a pod inside cluster-b.
+
+### Laptop access via cluster-a (recommended)
+
+```bash
+# Terminal 1 — keep this running in the background
+kubectl port-forward --context kind-cluster-a svc/harbor 5000:5000
+
+# Terminal 2
+curl -s http://localhost:5000/v2/      # -> {}
+```
+
+### Laptop access via a debug pod in cluster-b
+
+If you specifically need to exercise the cluster-b name from your laptop, port-forward
+the **curl client pod** in B (not the service) and exec into it:
+
+```bash
+kubectl exec -it --context kind-cluster-b harbor-client -- \
+  curl -s --max-time 20 http://harbor:5000/v2/     # -> {}
 ```
 
 ---
