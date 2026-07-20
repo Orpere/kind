@@ -1,0 +1,25 @@
+# deploy-harbor-proxy.yaml
+# A local TCP proxy pod in the "harbor" namespace on cluster-b. It dials the global
+# "harbor" service (resolved across the ClusterMesh to the Harbor pod in cluster-a) and
+# re-exposes it on :5000 inside cluster-b.
+#
+# Why this exists: a Cilium Global Service only syncs *endpoints* into the consumer
+# cluster's eBPF datapath — the k8s Endpoints/EndpointSlice object in cluster-b stays
+# empty, so `kubectl port-forward svc/harbor` (cluster-b) has no local backend and
+# fails with "connection refused". Port-forwarding THIS local pod instead works, and the
+# traffic still reaches Harbor in cluster-a over the mesh.
+#
+# Usage:
+#   kubectl port-forward --context kind-cluster-b -n harbor pod/harbor-proxy 5000:5000
+#   curl http://localhost:5000/v2/     # -> {} (Harbor registry API, served from cluster-a)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: harbor-proxy
+  namespace: harbor
+spec:
+  containers:
+    - name: socat
+      image: alpine/socat:latest
+      args: ["TCP-LISTEN:5000,fork,reuseaddr", "TCP:harbor:5000"]
+  restartPolicy: Never

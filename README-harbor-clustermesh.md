@@ -14,11 +14,12 @@ in A and the *client* lives in B.
 
 ## What gets deployed
 
-| Object | Cluster | Purpose |
-|--------|---------|---------|
-| `harbor` Deployment + Service (`global`) | cluster-a | The shared Harbor registry (`registry:2` on :5000) |
-| `harbor` Service (`global`) | cluster-b | Remote endpoint merge target — `harbor` resolves locally |
-| `harbor-client` pod (`curlimages/curl`) | cluster-b | Client that reaches `harbor` via cluster DNS |
+| Object | Cluster | Namespace | Purpose |
+|--------|---------|-----------|---------|
+| `harbor` Deployment + Service (`global`) | cluster-a | `harbor` | The shared Harbor registry (`registry:2` on :5000) |
+| `harbor` Service (`global`) | cluster-b | `harbor` | Remote endpoint merge target — `harbor` resolves locally |
+| `harbor-client` pod (`curlimages/curl`) | cluster-b | `harbor` | Client that reaches `harbor` via cluster DNS |
+| `harbor-proxy` pod (`alpine/socat`) | cluster-b | `harbor` | Local TCP proxy so `kubectl port-forward` from cluster-b reaches Harbor over the mesh |
 
 ---
 
@@ -30,7 +31,7 @@ in A and the *client* lives in B.
 flowchart TB
     subgraph HOST["💻 Local machine — Docker"]
         direction LR
-        subgraph A["🐳 kind cluster-a"]
+        subgraph A["🐳 kind cluster-a · ns harbor"]
             direction TB
             ANODE["🖥️ Nodes<br/>control-plane + worker"]
             ACIL["🛡️ Cilium<br/>agent + operator<br/>kube-proxy → eBPF"]
@@ -39,13 +40,14 @@ flowchart TB
             AHB["🚢 Harbor registry ×1<br/>registry:2 :5000"]
         end
 
-        subgraph B["🐳 kind cluster-b"]
+        subgraph B["🐳 kind cluster-b · ns harbor"]
             direction TB
             BNODE["🖥️ Nodes<br/>control-plane + worker"]
             BCIL["🛡️ Cilium<br/>agent + operator<br/>kube-proxy → eBPF"]
             BCA["🔑 Secret cilium-ca<br/>(same mTLS root)"]
             BHSV["📦 Service harbor<br/>global=true"]
-            BUB["🐧 ubuntu pod<br/>client"]
+            BUB["🐧 harbor-client<br/>curl pod"]
+            BPR["🔀 harbor-proxy<br/>socat :5000 → harbor:5000"]
         end
     end
 
@@ -60,6 +62,7 @@ flowchart TB
     BNODE --- BCIL
     BCIL -.->|adopts| BCA
     BUB --- BCIL
+    BPR --- BCIL
     BHSV --- BCIL
 
     ACA ===|"🔐 identical CA<br/>(mTLS)"| BCA
@@ -73,32 +76,35 @@ flowchart TB
     classDef svc fill:#2E86C1,stroke:#1F618D,color:#fff;
     classDef workload fill:#27AE60,stroke:#1E8449,color:#fff;
     classDef node fill:#154360,stroke:#1A5276,color:#fff;
+    classDef proxy fill:#E67E22,stroke:#CA6F1E,color:#fff;
 
     class ANODE,BNODE node;
     class ACA,BCA ca;
     class ACIL,BCIL cilium;
     class AHSV,BHSV svc;
     class AHB,BUB workload;
+    class BPR proxy;
 ```
 
 **Legend:** 🖥️ nodes · 🛡️ Cilium CNI/Proxy · 🔑 shared trust root (CA) · 📦 workload /
-Service · 🚢 Harbor · 🐧 Ubuntu client · 🌉 ClusterMesh control plane.
+Service · 🚢 Harbor · 🐧 curl client · 🔀 socat proxy (for port-forward) · 🌉 ClusterMesh
+control plane.
 
 ---
 
-### Request flow (Ubuntu in B → Harbor in A)
+### Request flow (curl in B → Harbor in A)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as 🐧 ubuntu<br/>(cluster-b)
+    participant U as 🐧 harbor-client<br/>(cluster-b)
     participant CB as 🛡️ Cilium B
     participant API2 as 🌉 apiserver B
     participant API as 🌉 apiserver A
     participant CA as 🛡️ Cilium A
     participant H as 🚢 Harbor<br/>(cluster-a)
 
-    U->>CB: curl http://harbor:5000/v2/ (DNS: harbor.default.svc)
+    U->>CB: curl http://harbor.harbor.svc:5000/v2/ (DNS: harbor.harbor.svc)
     CB->>API2: lookup global service "harbor" endpoints
     API2-->>CB: remote endpoints (cluster-a Harbor pod)
     CB->>API: 🔐 mTLS request over mesh (NodePort)
@@ -108,6 +114,33 @@ sequenceDiagram
     CA->>API: 🔐 mTLS response
     API->>CB: return over mesh
     CB-->>U: response delivered
+```
+
+### Request flow (laptop port-forward via proxy in B → Harbor in A)
+
+This is the path that lets you `kubectl port-forward` from cluster-b and reach the Harbor
+UI over the mesh (the global Service itself cannot be port-forwarded — see below).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant L as 💻 laptop
+    participant P as 🔀 harbor-proxy<br/>(pod, cluster-b)
+    participant CB as 🛡️ Cilium B
+    participant API as 🌉 apiserver A
+    participant CA as 🛡️ Cilium A
+    participant H as 🚢 Harbor<br/>(cluster-a)
+
+    L->>P: kubectl port-forward pod/harbor-proxy 5000:5000 → curl :5000/v2/
+    P->>CB: dial harbor.harbor.svc:5000 (global service)
+    CB->>API: 🔐 mTLS request over mesh (NodePort)
+    API->>CA: route to local Harbor backend
+    CA->>H: forward to pod :5000
+    H-->>CA: {} (OCI /v2/ response)
+    CA->>API: 🔐 mTLS response
+    API->>CB: return over mesh
+    CB-->>P: response
+    P-->>L: {} delivered to laptop
 ```
 
 ---
@@ -148,11 +181,12 @@ kubectl wait --context kind-cluster-b --for=condition=Ready pod/harbor-client --
 ### 4. Reach Harbor via local DNS from cluster-b
 
 The OCI registry serves its v2 API on port `5000`. From a pod **inside** cluster-b the
-`harbor` name resolves locally and is routed across the mesh to cluster-a:
+`harbor` name (in the `harbor` namespace) resolves locally and is routed across the mesh
+to cluster-a:
 
 ```bash
-kubectl exec --context kind-cluster-b harbor-client -- \
-  curl -s --max-time 20 http://harbor:5000/v2/
+kubectl exec --context kind-cluster-b -n harbor harbor-client -- \
+  curl -s --max-time 20 http://harbor.harbor.svc:5000/v2/
 ```
 
 Expected: `{}` — the standard OCI distribution `/v2/` response, served from the
@@ -162,51 +196,81 @@ Other checks:
 
 ```bash
 # DNS resolution (resolves to a cluster-b in-cluster VIP)
-kubectl exec --context kind-cluster-b harbor-client -- \
-  nslookup harbor.default.svc.cluster.local
+kubectl exec --context kind-cluster-b -n harbor harbor-client -- \
+  nslookup harbor.harbor.svc.cluster.local
 
 # Raw HTTP status
-kubectl exec --context kind-cluster-b harbor-client -- \
-  curl -s -o /dev/null -w "%{http_code}\n" --max-time 20 http://harbor:5000/v2/
+kubectl exec --context kind-cluster-b -n harbor harbor-client -- \
+  curl -s -o /dev/null -w "%{http_code}\n" --max-time 20 http://harbor.harbor.svc:5000/v2/
+```
+
+### 5. Port-forward Harbor to your laptop from cluster-b
+
+`kubectl port-forward svc/harbor` does NOT work on cluster-b (no local endpoints — see
+the port-forward section below). Deploy the local `socat` proxy pod and port-forward to
+*that* pod instead:
+
+```bash
+kubectl apply --context kind-cluster-b -f deploy-harbor-proxy.yaml
+kubectl wait --context kind-cluster-b -n harbor --for=condition=Ready pod/harbor-proxy --timeout=120s
+
+# Terminal 1 — keep running
+kubectl port-forward --context kind-cluster-b -n harbor pod/harbor-proxy 5000:5000
+
+# Terminal 2
+curl -s http://localhost:5000/v2/      # -> {} (Harbor UI/API via the mesh)
 ```
 
 ---
 
-## Accessing Harbor from outside the clusters (port-forward)
+## Accessing Harbor from your laptop (port-forward)
 
-There are two different access paths and they behave differently because of how Cilium
-syncs a Global Service:
+The goal — "port-forward on cluster-b and reach the Harbor UI over the mesh" — is met
+with a small local **proxy pod** in cluster-b. Here is why, and the working recipe.
 
-| You want to… | Works? | How |
-|--------------|--------|-----|
-| Reach `harbor` **from a pod in cluster-b** | ✅ | `curl http://harbor:5000/v2/` (step 4 above) — Cilium eBPF routes to cluster-a |
-| `kubectl port-forward` the **service in cluster-a** → laptop | ✅ | `kubectl port-forward --context kind-cluster-a svc/harbor 5000:5000` then `curl localhost:5000/v2/` |
-| `kubectl port-forward` the **service in cluster-b** → laptop | ❌ | The `harbor` Service in B has **no local endpoints** (its backends live in A, programmed by Cilium's eBPF datapath, not kube-proxy). `port-forward` selects a local endpoint and fails with `connection refused`. |
+### Why `kubectl port-forward svc/harbor` fails on cluster-b
 
-> ⚠️ **Why port-forward on cluster-b fails:** a Global Service only syncs *endpoints*,
-> not the Service or its local EndpointObjects. In cluster-b `kubectl get endpoints harbor`
-> shows `<none>`, so `kubectl port-forward svc/harbor` (cluster-b) has nothing local to
-> forward to. To reach Harbor from your laptop, port-forward in **cluster-a** (where the
-> pod actually runs), or use a pod inside cluster-b.
+A Cilium Global Service syncs *endpoints* into the consumer cluster's **eBPF datapath**
+only. The Kubernetes `Endpoints`/`EndpointSlice` object for `harbor` in cluster-b stays
+empty (`kubectl get endpoints harbor -n harbor` shows `<none>`). `kubectl port-forward`
+selects a local endpoint through kube-proxy/kubelet and, finding none, fails with
+`connection refused`. (Verified: even the known-good `backend` global service shows no
+mirrored EndpointSlice in the consumer cluster.) So the **Service** itself cannot be
+port-forwarded from cluster-b.
 
-### Laptop access via cluster-a (recommended)
+### Working recipe: port-forward the local proxy pod on cluster-b
+
+`deploy-harbor-proxy.yaml` runs a `socat` TCP proxy pod **inside cluster-b** that dials
+the global `harbor` name (resolved across the mesh to the Harbor pod in cluster-a) and
+re-exposes it on `:5000`. Because the pod is local to cluster-b, port-forwarding *to the
+pod* works — and the traffic still reaches Harbor in cluster-a over the mesh.
 
 ```bash
-# Terminal 1 — keep this running in the background
-kubectl port-forward --context kind-cluster-a svc/harbor 5000:5000
+# 1. Deploy the proxy pod in cluster-b (harbor namespace)
+kubectl apply --context kind-cluster-b -f deploy-harbor-proxy.yaml
+kubectl wait --context kind-cluster-b -n harbor --for=condition=Ready pod/harbor-proxy --timeout=120s
 
-# Terminal 2
-curl -s http://localhost:5000/v2/      # -> {}
+# 2. Port-forward the PROXY POD (not the Service) from cluster-b
+kubectl port-forward --context kind-cluster-b -n harbor pod/harbor-proxy 5000:5000
 ```
 
-### Laptop access via a debug pod in cluster-b
-
-If you specifically need to exercise the cluster-b name from your laptop, port-forward
-the **curl client pod** in B (not the service) and exec into it:
+In another terminal:
 
 ```bash
-kubectl exec -it --context kind-cluster-b harbor-client -- \
-  curl -s --max-time 20 http://harbor:5000/v2/     # -> {}
+curl -s http://localhost:5000/v2/      # -> {}  (Harbor registry API, served from cluster-a)
+```
+
+Data path: `laptop → kubelet port-forward → harbor-proxy pod (cluster-b) →
+harbor.default.svc (global, Cilium eBPF) → Harbor pod (cluster-a)`.
+
+### Alternative: port-forward the Service on cluster-a
+
+If reaching Harbor directly from where it runs is acceptable, port-forward the Service in
+the cluster that actually hosts the pod:
+
+```bash
+kubectl port-forward --context kind-cluster-a -n harbor svc/harbor 5000:5000
+curl -s http://localhost:5000/v2/      # -> {}
 ```
 
 ---
@@ -217,18 +281,21 @@ kubectl exec -it --context kind-cluster-b harbor-client -- \
   ClusterMesh control plane is mutually authenticated and encrypted.
 - **Global service annotation:** `service.cilium.io/global=true` (correct key — the
   deprecated `cilium.io/global-service` is silently ignored by Cilium 1.19).
-- **Endpoint sync:** `clustermesh.enableEndpointSliceSynchronization=true` merges
-  cluster-a's Harbor endpoints into cluster-b's `harbor` Service, so `harbor` resolves
-  and load-balances to the remote pods.
-- **Local DNS:** CoreDNS in cluster-b answers `harbor.default.svc.cluster.local` using
-  the synced endpoints — the client uses a plain in-cluster name, no external DNS needed.
+- **Endpoint sync into the datapath:** Cilium programs cluster-a's Harbor endpoints into
+  cluster-b's eBPF socket LB, so `harbor` resolves and load-balances to the remote pods
+  from any pod in cluster-b (and from the proxy pod used for port-forward).
+- **Local DNS:** CoreDNS in cluster-b answers `harbor.harbor.svc.cluster.local` using the
+  synced endpoints — the client uses a plain in-cluster name, no external DNS needed.
+- **harbor namespace:** Deployment, Service (both clusters) and the client/proxy pods all
+  live in the dedicated `harbor` namespace.
 
 ---
 
 ## Cleanup
 
 ```bash
-kubectl delete pod ubuntu-debug harbor-client --context kind-cluster-b 2>/dev/null
+kubectl delete pod harbor-client harbor-proxy --context kind-cluster-b -n harbor 2>/dev/null
 kubectl delete -f deploy-harbor.yaml --context kind-cluster-a 2>/dev/null
 kubectl delete -f deploy-harbor-service.yaml --context kind-cluster-b 2>/dev/null
+kubectl delete -f deploy-harbor-proxy.yaml --context kind-cluster-b 2>/dev/null
 ```

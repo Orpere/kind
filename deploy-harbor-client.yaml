@@ -1,13 +1,18 @@
 # deploy-harbor-client.yaml
-# A curl-enabled client pod for cluster-b, used to verify that the global "harbor"
-# service is reachable from cluster-b via local DNS. Uses a prebuilt image so the
-# test does NOT depend on pod internet egress (unlike ubuntu-debug.yaml, which needs
-# apt-get to install curl).
+# A curl-enabled client pod for the "harbor" namespace in cluster-b, used to verify that
+# the global "harbor" service is reachable from cluster-b via local DNS. Uses a prebuilt
+# image so the test does NOT depend on pod internet egress (unlike ubuntu-debug.yaml, which
+# needs apt-get to install curl).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: harbor
+---
 apiVersion: v1
 kind: Pod
 metadata:
   name: harbor-client
-  namespace: default
+  namespace: harbor
 spec:
   containers:
     - name: curl
