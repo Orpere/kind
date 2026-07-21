@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/component: server
+data:
+  # Vault server configuration for Raft integrated storage (HA mode).
+  # The node_id is derived from the VAULT_NODE_ID env var (set via downward API).
+  # Retry-join entries use the headless service DNS names for peer discovery.
+  vault.hcl: |
+    storage "raft" {
+      path = "/vault/data"
+
+      retry_join {
+        leader_api_addr = "http://vault-0.vault-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://vault-1.vault-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://vault-2.vault-internal:8200"
+      }
+    }
+
+    listener "tcp" {
+      address         = "0.0.0.0:8200"
+      cluster_address = "0.0.0.0:8201"
+      tls_disable     = true
+    }
+
+    service_registration "kubernetes" {}
+
+    disable_mlock = true

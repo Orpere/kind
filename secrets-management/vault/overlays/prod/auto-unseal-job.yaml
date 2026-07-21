@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-auto-unseal
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/component: auto-unseal
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: vault
+            app.kubernetes.io/component: auto-unseal
+        spec:
+          serviceAccountName: vault-auto-unseal
+          restartPolicy: OnFailure
+          volumes:
+            - name: unseal-key
+              secret:
+                secretName: vault-auto-unseal-key
+                items:
+                  - key: seal-key
+                    path: key
+          containers:
+            - name: kubectl
+              image: bitnami/kubectl:1.31
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"
+              command:
+                - /bin/bash
+                - -ec
+                - |
+                  UNSEAL_KEY=$(cat /vault/unseal/key)
+                  NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+                  for POD in $(kubectl get pods -l "app.kubernetes.io/name=vault" \
+                    --namespace "${NAMESPACE}" -o jsonpath='{.items[*].metadata.name}'); do
+                    echo "Checking vault pod: ${POD}"
+
+                    STATUS_JSON=$(kubectl exec "${POD}" --namespace "${NAMESPACE}" -- \
+                      vault status -format=json 2>&1) || {
+                      echo "ERROR: Failed to get status for ${POD}"
+                      continue
+                    }
+
+                    INITIALIZED=$(echo "${STATUS_JSON}" | \
+                      grep -o '"initialized":[^,}]*' | cut -d: -f2 | tr -d ' "')
+                    SEALED=$(echo "${STATUS_JSON}" | \
+                      grep -o '"sealed":[^,}]*' | cut -d: -f2 | tr -d ' "')
+
+                    if [ "${INITIALIZED}" != "true" ]; then
+                      echo "Pod ${POD} is not initialized yet. Skipping unseal."
+                      continue
+                    fi
+
+                    if [ "${SEALED}" = "true" ]; then
+                      echo "Pod ${POD} is sealed. Running unseal..."
+                      kubectl exec "${POD}" --namespace "${NAMESPACE}" -- \
+                        vault operator unseal "${UNSEAL_KEY}" 2>&1 || \
+                        echo "ERROR: Failed to unseal ${POD}"
+                    else
+                      echo "Pod ${POD} is already unsealed."
+                    fi
+                  done
+              volumeMounts:
+                - name: unseal-key
+                  mountPath: /vault/unseal
+                  readOnly: true

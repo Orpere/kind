@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-auto-unseal
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/component: auto-unseal
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vault-auto-unseal
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/component: auto-unseal
+rules:
+  # Allow listing vault pods and checking their status
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Allow exec-ing into vault pods to run vault operator unseal
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vault-auto-unseal
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/component: auto-unseal
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vault-auto-unseal
+subjects:
+  - kind: ServiceAccount
+    name: vault-auto-unseal

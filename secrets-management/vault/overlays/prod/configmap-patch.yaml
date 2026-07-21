@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+data:
+  # Production configuration with Raft integrated storage and Kubernetes auto-unseal.
+  # The seal stanza references a Kubernetes Secret that stores the seal key.
+  # Vault's service account must have 'get' permission on secrets to read this key.
+  vault.hcl: |
+    storage "raft" {
+      path = "/vault/data"
+
+      retry_join {
+        leader_api_addr = "http://vault-0.vault-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://vault-1.vault-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://vault-2.vault-internal:8200"
+      }
+    }
+
+    listener "tcp" {
+      address         = "0.0.0.0:8200"
+      cluster_address = "0.0.0.0:8201"
+      tls_disable     = true
+    }
+
+    seal "kubernetes" {
+      secret_name      = "vault-auto-unseal-key"
+      secret_namespace = "vault-prod"
+      key_name         = "seal-key"
+    }
+
+    service_registration "kubernetes" {}
+
+    disable_mlock = true

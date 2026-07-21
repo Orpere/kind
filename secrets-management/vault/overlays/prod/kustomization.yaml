@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - vault-auto-unseal-secret.yaml
+  - auto-unseal-job.yaml
+  - auto-unseal-rbac.yaml
+  - vault-rbac.yaml
+
+namespace: vault-prod
+
+patches:
+  # Ensure 3 replicas for HA Raft cluster
+  - target:
+      kind: StatefulSet
+      name: vault
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  # Fix the ClusterRoleBinding subject namespace to match the overlay namespace
+  - target:
+      kind: ClusterRoleBinding
+      name: vault
+    patch: |-
+      - op: replace
+        path: /subjects/0/namespace
+        value: vault-prod
+  # Add the seal stanza to the vault config via configmap-patch
+  - path: configmap-patch.yaml
