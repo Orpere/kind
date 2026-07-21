@@ -1,0 +1,512 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm-import
+  namespace: keycloak
+data:
+  realm-config.json: |
+    {
+      "realm": "mycompany",
+      "displayName": "MyCompany",
+      "enabled": true,
+      "sslRequired": "external",
+      "registrationAllowed": false,
+      "resetPasswordAllowed": true,
+      "verifyEmail": false,
+      "loginWithEmailAllowed": true,
+      "bruteForceProtected": true,
+      "failureFactor": 5,
+      "waitIncrementSeconds": 60,
+      "quickLoginCheckMilliSeconds": 1000,
+      "minimumQuickLoginWaitSeconds": 60,
+      "maxFailureWaitSeconds": 900,
+      "maxDeltaTimeSeconds": 43200,
+      "defaultRoles": [
+        "default-roles-mycompany"
+      ],
+      "clients": [
+        {
+          "clientId": "mycompany-webapp",
+          "name": "MyCompany Web Application",
+          "description": "Main web application (OIDC confidential client)",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "bearerOnly": false,
+          "consentRequired": false,
+          "standardFlowEnabled": true,
+          "implicitFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": true,
+          "authorizationServicesEnabled": true,
+          "redirectUris": [
+            "https://app.mycompany.com/*",
+            "https://app.mycompany.com/auth/callback",
+            "http://localhost:3000/*"
+          ],
+          "webOrigins": [
+            "https://app.mycompany.com",
+            "http://localhost:3000"
+          ],
+          "baseUrl": "https://app.mycompany.com",
+          "adminUrl": "https://app.mycompany.com",
+          "rootUrl": "",
+          "attributes": {
+            "post.logout.redirect.uris": "https://app.mycompany.com/logout",
+            "access.token.lifespan": "3600",
+            "client.secret.expiry": "0",
+            "pkce.code.challenge.method": "S256"
+          },
+          "protocolMappers": [
+            {
+              "name": "audience-mapper",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {
+                "included.client.audience": "mycompany-webapp",
+                "id.token.claim": "true",
+                "access.token.claim": "true"
+              }
+            },
+            {
+              "name": "groups-mapper",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "config": {
+                "claim.name": "groups",
+                "full.path": "true",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ],
+          "defaultClientScopes": [
+            "web-origins",
+            "roles",
+            "profile",
+            "email"
+          ],
+          "authorizationSettings": {
+            "allowRemoteResourceManagement": true,
+            "policyEnforcementMode": "ENFORCING",
+            "decisionStrategy": "AFFIRMATIVE",
+            "policies": [
+              {
+                "name": "Admin-only policy",
+                "description": "Only admin role members can access protected resources",
+                "type": "role",
+                "logic": "POSITIVE",
+                "decisionStrategy": "UNANIMOUS",
+                "config": {
+                  "roles": "[{\"id\":\"admin\",\"required\":true}]"
+                }
+              },
+              {
+                "name": "Developer access policy",
+                "description": "Developer role members can access developer resources",
+                "type": "role",
+                "logic": "POSITIVE",
+                "decisionStrategy": "UNANIMOUS",
+                "config": {
+                  "roles": "[{\"id\":\"developer\",\"required\":true}]"
+                }
+              },
+              {
+                "name": "Time-restricted access",
+                "description": "Allow access only during business hours (JS policy example)",
+                "type": "js",
+                "logic": "POSITIVE",
+                "decisionStrategy": "UNANIMOUS",
+                "config": {
+                  "script": "// Allow access Mon-Fri 9am-5pm\nvar hour = new Date().getHours();\nvar day = new Date().getDay();\nif (day >= 1 && day <= 5 && hour >= 9 && hour < 17) {\n    $evaluation.grant();\n} else {\n    $evaluation.deny();\n}"
+                }
+              }
+            ],
+            "resources": [
+              {
+                "name": "Admin API",
+                "displayName": "Admin API Resources",
+                "type": "urn:mycompany:resources:admin-api",
+                "ownerManagedAccess": false,
+                "attributes": {},
+                "uris": ["/api/admin/*"],
+                "scopes": [
+                  {
+                    "name": "admin:read"
+                  },
+                  {
+                    "name": "admin:write"
+                  }
+                ]
+              },
+              {
+                "name": "Application API",
+                "displayName": "Application API Resources",
+                "type": "urn:mycompany:resources:app-api",
+                "ownerManagedAccess": false,
+                "attributes": {},
+                "uris": ["/api/app/*"],
+                "scopes": [
+                  {
+                    "name": "app:read"
+                  },
+                  {
+                    "name": "app:write"
+                  }
+                ]
+              }
+            ],
+            "permissions": [
+              {
+                "name": "Admin API permission",
+                "description": "Admin role can access Admin API",
+                "type": "resource",
+                "logic": "POSITIVE",
+                "decisionStrategy": "UNANIMOUS",
+                "config": {
+                  "resources": "[\"Admin API\"]",
+                  "applyPolicies": "[\"Admin-only policy\"]"
+                }
+              },
+              {
+                "name": "Developer API permission",
+                "description": "Developer role can access Application API",
+                "type": "resource",
+                "logic": "POSITIVE",
+                "decisionStrategy": "UNANIMOUS",
+                "config": {
+                  "resources": "[\"Application API\"]",
+                  "applyPolicies": "[\"Developer access policy\", \"Time-restricted access\"]"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "clientId": "mycompany-api",
+          "name": "MyCompany Backend API",
+          "description": "Backend API service (bearer-only)",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "bearerOnly": true,
+          "consentRequired": false,
+          "standardFlowEnabled": false,
+          "implicitFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "redirectUris": [],
+          "webOrigins": [],
+          "attributes": {
+            "access.token.lifespan": "3600"
+          },
+          "protocolMappers": [
+            {
+              "name": "groups-mapper",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "config": {
+                "claim.name": "groups",
+                "full.path": "true",
+                "id.token.claim": "true",
+                "access.token.claim": "true"
+              }
+            }
+          ]
+        },
+        {
+          "clientId": "mycompany-spa",
+          "name": "MyCompany Single Page Application",
+          "description": "SPA client (public, PKCE)",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": true,
+          "bearerOnly": false,
+          "consentRequired": false,
+          "standardFlowEnabled": true,
+          "implicitFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "redirectUris": [
+            "https://spa.mycompany.com/*",
+            "http://localhost:5173/*"
+          ],
+          "webOrigins": [
+            "https://spa.mycompany.com",
+            "http://localhost:5173"
+          ],
+          "baseUrl": "https://spa.mycompany.com",
+          "attributes": {
+            "post.logout.redirect.uris": "https://spa.mycompany.com/logout",
+            "pkce.code.challenge.method": "S256",
+            "access.token.lifespan": "1800"
+          },
+          "protocolMappers": [
+            {
+              "name": "audience-mapper",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {
+                "included.client.audience": "mycompany-api",
+                "id.token.claim": "true",
+                "access.token.claim": "true"
+              }
+            }
+          ],
+          "defaultClientScopes": [
+            "web-origins",
+            "roles",
+            "profile",
+            "email"
+          ]
+        },
+        {
+          "clientId": "mycompany-cli",
+          "name": "MyCompany CLI Tool",
+          "description": "CLI tool using device authorization grant",
+          "enabled": true,
+          "protocol": "openid-connect",
+          "publicClient": true,
+          "bearerOnly": false,
+          "consentRequired": false,
+          "standardFlowEnabled": false,
+          "implicitFlowEnabled": false,
+          "directAccessGrantsEnabled": true,
+          "serviceAccountsEnabled": false,
+          "oauth2DeviceAuthorizationGrantEnabled": true,
+          "redirectUris": [
+            "http://localhost:8080/callback"
+          ],
+          "webOrigins": [],
+          "attributes": {
+            "access.token.lifespan": "900"
+          }
+        }
+      ],
+      "roles": {
+        "realm": [
+          {
+            "name": "admin",
+            "description": "Administrator with full access",
+            "composite": false,
+            "clientRole": false,
+            "attributes": {}
+          },
+          {
+            "name": "developer",
+            "description": "Developer with read-write access to resources",
+            "composite": false,
+            "clientRole": false,
+            "attributes": {}
+          },
+          {
+            "name": "viewer",
+            "description": "Read-only access",
+            "composite": false,
+            "clientRole": false,
+            "attributes": {}
+          },
+          {
+            "name": "default-roles-mycompany",
+            "description": "Default role for all users",
+            "composite": true,
+            "clientRole": false,
+            "composites": {
+              "realm": ["viewer"]
+            }
+          }
+        ],
+        "client": {
+          "realm-management": [
+            {
+              "name": "manage-users",
+              "description": "Manage users"
+            },
+            {
+              "name": "manage-clients",
+              "description": "Manage clients"
+            }
+          ],
+          "mycompany-webapp": [
+            {
+              "name": "app-admin",
+              "description": "Web application administrator"
+            },
+            {
+              "name": "app-user",
+              "description": "Standard web application user"
+            },
+            {
+              "name": "app-reader",
+              "description": "Read-only access to web application"
+            }
+          ]
+        }
+      },
+      "groups": [
+        {
+          "name": "engineering",
+          "attributes": {
+            "department": ["engineering"],
+            "slack_channel": ["#eng-team"]
+          },
+          "realmRoles": ["developer"],
+          "subGroups": [
+            {
+              "name": "engineering-lead",
+              "attributes": {
+                "department": ["engineering"],
+                "slack_channel": ["#eng-leads"]
+              },
+              "realmRoles": ["admin"]
+            },
+            {
+              "name": "frontend",
+              "attributes": {
+                "department": ["engineering"],
+                "stack": ["frontend"]
+              },
+              "realmRoles": ["developer"]
+            },
+            {
+              "name": "backend",
+              "attributes": {
+                "department": ["engineering"],
+                "stack": ["backend"]
+              },
+              "realmRoles": ["developer"]
+            }
+          ]
+        },
+        {
+          "name": "security",
+          "attributes": {
+            "department": ["security"],
+            "slack_channel": ["#sec-team"]
+          },
+          "realmRoles": ["viewer"],
+          "subGroups": [
+            {
+              "name": "security-admin",
+              "attributes": {
+                "department": ["security"]
+              },
+              "realmRoles": ["admin"]
+            }
+          ]
+        },
+        {
+          "name": "viewers",
+          "attributes": {
+            "department": ["external"]
+          },
+          "realmRoles": ["viewer"]
+        }
+      ],
+      "users": [
+        {
+          "username": "jane.doe",
+          "email": "jane.doe@mycompany.com",
+          "firstName": "Jane",
+          "lastName": "Doe",
+          "enabled": true,
+          "emailVerified": true,
+          "attributes": {
+            "title": ["VP of Engineering"],
+            "phone": ["+1-555-0100"]
+          },
+          "credentials": [
+            {
+              "type": "password",
+              "value": "changeme-jane",
+              "temporary": true
+            }
+          ],
+          "groups": ["engineering/engineering-lead"],
+          "realmRoles": ["admin"],
+          "clientRoles": {
+            "realm-management": ["manage-users"],
+            "mycompany-webapp": ["app-admin"]
+          }
+        },
+        {
+          "username": "john.smith",
+          "email": "john.smith@mycompany.com",
+          "firstName": "John",
+          "lastName": "Smith",
+          "enabled": true,
+          "emailVerified": true,
+          "attributes": {
+            "title": ["Senior Developer"],
+            "phone": ["+1-555-0101"]
+          },
+          "credentials": [
+            {
+              "type": "password",
+              "value": "changeme-john",
+              "temporary": true
+            }
+          ],
+          "groups": ["engineering/backend"],
+          "realmRoles": ["developer"]
+        },
+        {
+          "username": "alice.wang",
+          "email": "alice.wang@mycompany.com",
+          "firstName": "Alice",
+          "lastName": "Wang",
+          "enabled": true,
+          "emailVerified": true,
+          "attributes": {
+            "title": ["Frontend Developer"]
+          },
+          "credentials": [
+            {
+              "type": "password",
+              "value": "changeme-alice",
+              "temporary": true
+            }
+          ],
+          "groups": ["engineering/frontend"],
+          "realmRoles": ["developer"]
+        },
+        {
+          "username": "bob.jones",
+          "email": "bob.jones@mycompany.com",
+          "firstName": "Bob",
+          "lastName": "Jones",
+          "enabled": true,
+          "emailVerified": true,
+          "attributes": {
+            "title": ["Security Engineer"]
+          },
+          "credentials": [
+            {
+              "type": "password",
+              "value": "changeme-bob",
+              "temporary": true
+            }
+          ],
+          "groups": ["security/security-admin"],
+          "realmRoles": ["admin"]
+        },
+        {
+          "username": "charlie.brown",
+          "email": "charlie.brown@partner.com",
+          "firstName": "Charlie",
+          "lastName": "Brown",
+          "enabled": true,
+          "emailVerified": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "changeme-charlie",
+              "temporary": true
+            }
+          ],
+          "groups": ["viewers"],
+          "realmRoles": ["viewer"]
+        }
+      ]
+    }

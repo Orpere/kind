@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namespace: keycloak-dev
+
+patches:
+  - target:
+      kind: Deployment
+      name: keycloak
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom
+        value:
+          - configMapRef:
+              name: keycloak-config-dev
+
+configMapGenerator:
+  - name: keycloak-config-dev
+    behavior: create
+    literals:
+      - KC_HOSTNAME=keycloak.dev.mycompany.com
+      - KC_HTTP_ENABLED=true
+      - KC_DB=dev-file
+      - KC_PROXY=edge
+      - KC_LOG_LEVEL=DEBUG
+      - KC_METRICS_ENABLED=false
+      - KC_HEALTH_ENABLED=true

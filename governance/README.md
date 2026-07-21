@@ -10,7 +10,9 @@ This directory contains policies, compliance frameworks, and operational guideli
 - Audit logging and monitoring requirements
 - Incident response procedures
 - Infrastructure-as-Code review processes
+- Identity and Access Management (IAM) — see [Keycloak deployment](./keycloak/README.md)
 
 ## Related Resources
 
+- [./keycloak](./keycloak/README.md) — IAM deployment with Kustomize + config-as-code
 - [./secret-management](../secret-management/README.md) — secrets handling governed by these policies

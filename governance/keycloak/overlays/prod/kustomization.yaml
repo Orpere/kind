@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namespace: keycloak
+
+patches:
+  - target:
+      kind: Deployment
+      name: keycloak
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom
+        value:
+          - configMapRef:
+              name: keycloak-config-prod
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: KC_PROXY_HEADERS
+          value: xforwarded
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+
+configMapGenerator:
+  - name: keycloak-config-prod
+    behavior: create
+    literals:
+      - KC_HOSTNAME=auth.mycompany.com
+      - KC_HTTP_ENABLED=true
+      - KC_PROXY=edge
+      - KC_DB=postgres
+      - KC_DB_URL_HOST=keycloak-postgresql.keycloak.svc.cluster.local
+      - KC_DB_URL_DATABASE=keycloak
+      - KC_DB_URL_PORT=5432
+      - KC_DB_SCHEMA=public
+      - KC_DB_USERNAME=keycloak
+      - KC_LOG_LEVEL=INFO
+      - KC_METRICS_ENABLED=true
+      - KC_HEALTH_ENABLED=true
