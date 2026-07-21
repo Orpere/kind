@@ -7,20 +7,20 @@ This directory contains a Kustomize-based deployment of [HashiCorp Vault](https:
 ### High-Level Design
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#7C3AED', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#5B21B6', 'lineColor': '#64748B', 'secondaryColor': '#2563EB', 'tertiaryColor': '#059669', 'clusterBkg': '#F1F5F9', 'clusterBorder': '#CBD5E1', 'nodeBorder': '#475569', 'fontFamily': 'system-ui, -apple-system, sans-serif' }}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#2563EB", "tertiaryColor": "#3B82F6", "clusterBkg": "#FFFFFF", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 graph TB
     subgraph "Kubernetes Cluster (kind)"
         subgraph "vault-prod Namespace"
-            ST([StatefulSet<br/>vault-0, vault-1, vault-2])
-            SVC[Service<br/>vault:8200]
-            SVC_INT[Headless Service<br/>vault-internal:8201]
-            CM[(ConfigMap<br/>vault-config)]
-            SEC[(Secret<br/>vault-auto-unseal-key)]
-            CJ([CronJob<br/>vault-auto-unseal])
-            SA_V(SA: vault)
-            SA_CJ(SA: vault-auto-unseal)
-            R_V(Role: vault-secrets<br/>get secrets)
-            R_CJ(Role: vault-auto-unseal<br/>exec into pods)
+            ST([🏗️ StatefulSet<br/>vault-0, vault-1, vault-2])
+            SVC[🌐 Service<br/>vault:8200]
+            SVC_INT[🌐 Headless Service<br/>vault-internal:8201]
+            CM[(📋 ConfigMap<br/>vault-config)]
+            SEC[(🔒 Secret<br/>vault-auto-unseal-key)]
+            CJ([⏰ CronJob<br/>vault-auto-unseal])
+            SA_V(👤 SA: vault)
+            SA_CJ(👤 SA: vault-auto-unseal)
+            R_V(🛡️ Role: vault-secrets<br/>get secrets)
+            R_CJ(🛡️ Role: auto-unseal<br/>exec into pods)
         end
     end
 
@@ -35,33 +35,35 @@ graph TB
     CJ -.->|"Bound to"| R_CJ
     R_V -->|"get secrets"| SEC
 
-    classDef vault fill:#7C3AED,color:#ffffff,stroke:#5B21B6,stroke-width:2px
-    classDef k8s fill:#2563EB,color:#ffffff,stroke:#1D4ED8,stroke-width:2px
-    classDef rbac fill:#D97706,color:#ffffff,stroke:#B45309,stroke-width:2px
-    classDef data fill:#0F766E,color:#ffffff,stroke:#0D5E57,stroke-width:2px
+    classDef primary fill:#1E3A5F,color:#FFFFFF,stroke:#15294A,stroke-width:2px
+    classDef secondary fill:#2563EB,color:#FFFFFF,stroke:#1D4ED8,stroke-width:2px
+    classDef tertiary fill:#3B82F6,color:#FFFFFF,stroke:#2563EB,stroke-width:2px
+    classDef accent fill:#F59E0B,color:#FFFFFF,stroke:#D97706,stroke-width:2px
+    classDef data fill:#0F766E,color:#FFFFFF,stroke:#0D5E57,stroke-width:2px
+    classDef rbac fill:#475569,color:#FFFFFF,stroke:#334155,stroke-width:2px
 
-    class ST vault
-    class SVC,SVC_INT k8s
+    class ST primary
+    class CJ primary
+    class SVC,SVC_INT secondary
     class CM,SEC data
-    class CJ vault
     class SA_V,SA_CJ,R_V,R_CJ rbac
 ```
 
 ### Component Architecture
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#EA580C', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#C2410C', 'lineColor': '#64748B', 'secondaryColor': '#2563EB', 'tertiaryColor': '#7C3AED', 'clusterBkg': '#FFF7ED', 'clusterBorder': '#FDBA74', 'fontFamily': 'system-ui, -apple-system, sans-serif' }}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#2563EB", "tertiaryColor": "#3B82F6", "clusterBkg": "#F8FAFC", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 graph LR
     subgraph "Vault Pod (vault-N)"
-        V([Vault Server<br/>hashicorp/vault:1.18.0])
-        CFG[/"vault.hcl<br/>/vault/config"/]
-        DATA[("Raft Data<br/>/vault/data")]
+        V([🏛️ Vault Server<br/>hashicorp/vault:1.18.0])
+        CFG[/"📄 vault.hcl<br/>/vault/config"/]
+        DATA([💾 Raft Data<br/>/vault/data])
     end
 
     subgraph "Kubernetes API"
-        CM[(ConfigMap)]
-        SEC[(Secret)]
-        API[API Server]
+        CM[(📋 ConfigMap)]
+        SEC[(🔒 Secret)]
+        API[☸️ API Server]
     end
 
     CFG ==>|"storage raft"| DATA
@@ -69,15 +71,16 @@ graph LR
     V ==o|"unseal via K8s seal"| SEC
     V -.->|"service_registration"| API
 
-    classDef vault fill:#EA580C,color:#ffffff,stroke:#C2410C,stroke-width:2px
-    classDef config fill:#D97706,color:#ffffff,stroke:#B45309,stroke-width:2px,stroke-dasharray: 4
-    classDef storage fill:#0F766E,color:#ffffff,stroke:#0D5E57,stroke-width:2px
-    classDef k8s fill:#2563EB,color:#ffffff,stroke:#1D4ED8,stroke-width:2px
+    classDef primary fill:#1E3A5F,color:#FFFFFF,stroke:#15294A,stroke-width:2px
+    classDef secondary fill:#2563EB,color:#FFFFFF,stroke:#1D4ED8,stroke-width:2px
+    classDef tertiary fill:#3B82F6,color:#FFFFFF,stroke:#2563EB,stroke-width:2px
+    classDef accent fill:#F59E0B,color:#FFFFFF,stroke:#D97706,stroke-width:2px,stroke-dasharray: 4
+    classDef data fill:#0F766E,color:#FFFFFF,stroke:#0D5E57,stroke-width:2px
 
-    class V vault
-    class CFG config
-    class DATA storage
-    class CM,SEC,API k8s
+    class V primary
+    class CFG accent
+    class DATA data
+    class CM,SEC,API secondary
 ```
 
 ### Key Components
@@ -97,37 +100,37 @@ graph LR
 ## Security Architecture
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#7C3AED', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#5B21B6', 'lineColor': '#64748B', 'secondaryColor': '#059669', 'tertiaryColor': '#DC2626', 'clusterBkg': '#F5F3FF', 'clusterBorder': '#C4B5FD', 'fontFamily': 'system-ui, -apple-system, sans-serif' }}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#10B981", "tertiaryColor": "#EF4444", "clusterBkg": "#F8FAFC", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 flowchart TB
     subgraph "Auto-Unseal on Startup"
-        A[Vault starts<br/>in sealed state] --> B[Vault reads<br/>vault.hcl]
-        B --> C["seal 'kubernetes'<br/>stanza found"]
-        C --> D[Authenticates to<br/>K8s API via SA token]
-        D --> E[Reads Secret<br/>vault-auto-unseal-key]
+        A[🔒 Vault starts<br/>in sealed state] --> B[📄 Vault reads<br/>vault.hcl]
+        B --> C["🔏 seal kubernetes<br/>stanza found"]
+        C --> D[🔑 Authenticates to<br/>K8s API via SA token]
+        D --> E[📖 Reads Secret<br/>vault-auto-unseal-key]
         E --> F{Seal key valid?}
         F -->|Yes| G["vault operator unseal<br/>(automatic)"]
-        G --> H[Vault is operational]
-        F -->|No| I[Log error<br/>wait for retry]
+        G --> H[✅ Vault is operational]
+        F -->|No| I[⚠️ Log error<br/>wait for retry]
         I --> D
     end
 
     subgraph "CronJob Safety Net (every 5 min)"
-        J[CronJob triggers] --> K[List vault pods]
-        K --> L[Exec into each pod]
+        J[⏰ CronJob triggers] --> K[📋 List vault pods]
+        K --> L[🔌 Exec into each pod]
         L --> M["vault status<br/>-format=json"]
         M --> N{Sealed?}
-        N -->|Yes| O["vault operator unseal<br/>with key from volume mount"]
-        O --> P[Pod is unsealed]
-        N -->|No| Q[Skip pod]
-        Q --> R[Check next pod]
+        N -->|Yes| O["🔓 vault operator unseal<br/>with key from mount"]
+        O --> P[✅ Pod is unsealed]
+        N -->|No| Q[⏭️ Skip pod]
+        Q --> R[⏩ Check next pod]
         R --> L
     end
 
-    classDef startup fill:#7C3AED,color:#ffffff,stroke:#5B21B6,stroke-width:2px
-    classDef cronjob fill:#2563EB,color:#ffffff,stroke:#1D4ED8,stroke-width:2px
-    classDef decision fill:#D97706,color:#ffffff,stroke:#B45309,stroke-width:2px
-    classDef success fill:#059669,color:#ffffff,stroke:#047857,stroke-width:2px
-    classDef failure fill:#DC2626,color:#ffffff,stroke:#B91C1C,stroke-width:2px
+    classDef startup fill:#1E3A5F,color:#FFFFFF,stroke:#15294A,stroke-width:2px
+    classDef cronjob fill:#2563EB,color:#FFFFFF,stroke:#1D4ED8,stroke-width:2px
+    classDef decision fill:#F59E0B,color:#FFFFFF,stroke:#D97706,stroke-width:2px
+    classDef success fill:#10B981,color:#FFFFFF,stroke:#059669,stroke-width:2px
+    classDef failure fill:#EF4444,color:#FFFFFF,stroke:#DC2626,stroke-width:2px
 
     class A,B,C,D,E,G startup
     class H,P success
@@ -147,7 +150,7 @@ flowchart TB
 ## HA Raft Consensus
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#7C3AED', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#5B21B6', 'secondaryColor': '#2563EB', 'tertiaryColor': '#059669', 'lineColor': '#64748B', 'fontFamily': 'system-ui, -apple-system, sans-serif', 'actorBorder': '#475569', 'actorBkg': '#F1F5F9', 'actorTextColor': '#1E293B', 'noteBkgColor': '#FEF3C7', 'noteBorderColor': '#F59E0B', 'signalColor': '#64748B', 'signalTextColor': '#475569' }}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "secondaryColor": "#2563EB", "tertiaryColor": "#10B981", "lineColor": "#94A3B8", "fontFamily": "system-ui, -apple-system, sans-serif", "actorBorder": "#475569", "actorBkg": "#F8FAFC", "actorTextColor": "#1E293B", "noteBkgColor": "#FEF3C7", "noteBorderColor": "#F59E0B", "signalColor": "#94A3B8", "signalTextColor": "#475569"}}%%
 sequenceDiagram
     participant V0 as vault-0
     participant V1 as vault-1
@@ -377,34 +380,34 @@ All probes use `standbyok=true` so that standby nodes are considered healthy.
 ## Overlays Compared
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#475569', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#334155', 'lineColor': '#94A3B8', 'secondaryColor': '#D97706', 'tertiaryColor': '#7C3AED', 'clusterBkg': '#F8FAFC', 'clusterBorder': '#E2E8F0', 'fontFamily': 'system-ui, -apple-system, sans-serif' }}}%%
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#475569", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#F59E0B", "tertiaryColor": "#1E3A5F", "clusterBkg": "#FFFFFF", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 graph TB
 
     subgraph "Base Layer (shared)"
         direction TB
-        ST([StatefulSet])
-        SVC[Service<br/>:8200]
-        SVC_INT[Headless Service<br/>:8201]
-        SA(ServiceAccount)
-        CR[ClusterRole + Binding]
+        ST([🏗️ StatefulSet])
+        SVC[🌐 Service<br/>:8200]
+        SVC_INT[🌐 Headless Service<br/>:8201]
+        SA(👤 ServiceAccount)
+        CR[🛡️ ClusterRole + Binding]
     end
 
     subgraph "Dev Overlay"
         direction TB
-        CM_DEV[(ConfigMap<br/>file storage)]
-        NS_DEV["Namespace: vault-dev"]
-        R1["Replicas: 1"]
+        CM_DEV[(📋 ConfigMap<br/>file storage)]
+        NS_DEV["📁 Namespace: vault-dev"]
+        R1["1️⃣ Replicas: 1"]
     end
 
     subgraph "Prod Overlay"
         direction TB
-        CM_PROD[(ConfigMap<br/>Raft + seal)]
-        NS_PROD["Namespace: vault-prod"]
-        R3["Replicas: 3"]
-        SEC[(Auto-Unseal<br/>Secret)]
-        CJ([CronJob])
-        RBAC_PROD[Vault Secrets Role]
-        RBAC_CJ[Auto-Unseal RBAC]
+        CM_PROD[(📋 ConfigMap<br/>Raft + seal)]
+        NS_PROD["📁 Namespace: vault-prod"]
+        R3["3️⃣ Replicas: 3"]
+        SEC[(🔒 Auto-Unseal<br/>Secret)]
+        CJ([⏰ CronJob])
+        RBAC_PROD[🛡️ Vault Secrets Role]
+        RBAC_CJ[🛡️ Auto-Unseal RBAC]
     end
 
     ST --->|patches| R1
@@ -414,9 +417,9 @@ graph TB
     SVC --->|extends| NS_PROD
 
 
-    classDef base fill:#475569,color:#ffffff,stroke:#334155,stroke-width:2px
-    classDef dev fill:#D97706,color:#ffffff,stroke:#B45309,stroke-width:2px
-    classDef prod fill:#7C3AED,color:#ffffff,stroke:#5B21B6,stroke-width:2px
+    classDef base fill:#475569,color:#FFFFFF,stroke:#334155,stroke-width:2px
+    classDef dev fill:#F59E0B,color:#FFFFFF,stroke:#D97706,stroke-width:2px
+    classDef prod fill:#1E3A5F,color:#FFFFFF,stroke:#15294A,stroke-width:2px
     class ST,SVC,SVC_INT,SA,CR base
     class CM_DEV,NS_DEV,R1 dev
     class CM_PROD,NS_PROD,R3,SEC,CJ,RBAC_PROD,RBAC_CJ prod
