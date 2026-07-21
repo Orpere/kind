@@ -1,0 +1,56 @@
+# helm-values.yaml — Sealed Secrets Controller with GPG multi-key support
+# Deploy: helm install sealed-secrets sealed-secrets/sealed-secrets \
+#          --namespace kube-system --values helm-values.yaml
+
+replicaCount: 2
+
+# GPG configuration
+sealedsecrets:
+  # Mount the GPG keys secret
+  secretName: sealed-secrets-gpg-keys
+  # Use GPG key format (not RSA)
+  keyFormat: gpg
+
+# Resource limits (production sizing)
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  capabilities:
+    drop: ["ALL"]
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+# Note: readOnlyRootFilesystem omitted — controller writes GPG keyring material to /tmp
+
+# Service monitor for Prometheus (observability)
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  interval: 30s
+
+# Pod disruption budget (reliability)
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Topology spread (reliability — avoid single node)
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: sealed-secrets
