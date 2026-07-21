@@ -134,14 +134,16 @@ flowchart TB
     CA_B -.->|"🪪 issues & verifies certs"| CIL_B
     CA_A ===|"🤝 identical on both sides"| CA_B
 
-    style LAN fill:#2C3E50,stroke:#1ABC9C,color:#fff
-    style LOCK fill:#34495E,stroke:#1ABC9C,color:#fff
-    style CA_A fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style CA_B fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style CIL_A fill:#2471A3,stroke:#1A5276,color:#fff
-    style CIL_B fill:#2471A3,stroke:#1A5276,color:#fff
-    style APP_A fill:#27AE60,stroke:#1E8449,color:#fff
-    style APP_B fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef lan fill:#2C3E50,stroke:#1ABC9C,color:#fff
+    classDef lock fill:#34495E,stroke:#1ABC9C,color:#fff
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    classDef cilium fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef app fill:#27AE60,stroke:#1E8449,color:#fff
+    class LAN lan
+    class LOCK lock
+    class CA_A,CA_B ca
+    class CIL_A,CIL_B cilium
+    class APP_A,APP_B app
 ```
 
 **In one sentence:** An app in `cluster-a` asks for `backend`, Cilium encrypts and
@@ -298,10 +300,12 @@ flowchart LR
     SEC_A --> TRUST["🤝 Both clusters<br/>trust each other (mTLS)"]
     SEC_B --> TRUST
 
-    style CA fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style SEC_A fill:#2471A3,stroke:#1A5276,color:#fff
-    style SEC_B fill:#2471A3,stroke:#1A5276,color:#fff
-    style TRUST fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    classDef secret fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef trust fill:#27AE60,stroke:#1E8449,color:#fff
+    class CA ca
+    class SEC_A,SEC_B secret
+    class TRUST trust
 ```
 
 > ⚠️ **Security note:** This shared CA is the foundation of our mTLS. We do **not** use the shortcut flag `--allow-mismatching-ca`, which would blindly trust any identity.
@@ -361,8 +365,9 @@ cilium clustermesh enable --context kind-cluster-b --service-type NodePort
 ```mermaid
 flowchart LR
     A["🏢 cluster-a<br/>🚪 NodePort door"] -->|"🔐 mTLS through local Docker net"| B["🏢 cluster-b<br/>🚪 NodePort door"]
-    style A fill:#2471A3,stroke:#1A5276,color:#fff
-    style B fill:#2471A3,stroke:#1A5276,color:#fff
+
+    classDef cluster fill:#2471A3,stroke:#1A5276,color:#fff
+    class A,B cluster
 ```
 
 ---
@@ -462,10 +467,12 @@ flowchart TB
     VER --> DEC["🔓 Cilium decrypts + delivers"]
     DEC --> RESP["📥 Backend responds"]
 
-    style ENC fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style VER fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style NET fill:#2C3E50,stroke:#1ABC9C,color:#fff
-    style DEC fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef mtls fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    classDef network fill:#2C3E50,stroke:#1ABC9C,color:#fff
+    classDef decrypt fill:#2471A3,stroke:#1A5276,color:#fff
+    class ENC,VER mtls
+    class NET network
+    class DEC decrypt
 ```
 
 ---

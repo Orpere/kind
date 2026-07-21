@@ -115,7 +115,9 @@ graph TB
     A1 -- "🚀 Wants to call 'database'" --> CM["🌉 Cilium Cluster Mesh<br/>🔐 encrypted + 🪪 verified"]
     CM -- "🔗 Secure tunnel (mTLS)" --> B2
     B2 -- "⬅️ Routes to" --> B1
-    style CM fill:#4A90D9,stroke:#2C5F8A,color:#fff
+
+    classDef mesh fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    class CM mesh
 ```
 
 ### The three security promises
@@ -150,10 +152,15 @@ flowchart LR
     A <-->|"🔐 mTLS over local net"| B
     CA -.->|"🪪 trusted by"| A
     CA -.->|"🪪 trusted by"| B
-    style A fill:#2471A3,stroke:#1A5276,color:#fff
-    style B fill:#27AE60,stroke:#1E8449,color:#fff
-    style CA fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style DK fill:#2C3E50,stroke:#1ABC9C,color:#fff
+
+    classDef clusterA fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef clusterB fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    classDef docker fill:#2C3E50,stroke:#1ABC9C,color:#fff
+    class A clusterA
+    class B clusterB
+    class CA ca
+    class DK docker
 ```
 
 ---
@@ -174,10 +181,15 @@ flowchart LR
     A <-->|"🔐 mTLS over private network"| B
     CA -.->|"🪪 trusted by"| A
     CA -.->|"🪪 trusted by"| B
-    style A fill:#2471A3,stroke:#1A5276,color:#fff
-    style B fill:#27AE60,stroke:#1E8449,color:#fff
-    style CA fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style VPC fill:#2C3E50,stroke:#1ABC9C,color:#fff
+
+    classDef clusterA fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef clusterB fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    classDef vpc fill:#2C3E50,stroke:#1ABC9C,color:#fff
+    class A clusterA
+    class B clusterB
+    class CA ca
+    class VPC vpc
 ```
 
 > On AWS use **internal** `LoadBalancer` (not internet-facing). On Azure use an internal `LoadBalancer`. Never make the mesh endpoint public.
@@ -200,10 +212,13 @@ flowchart LR
     end
     A <-->|"🔐 VPC Peering / Transit GW<br/>(private, mTLS)"| B
     CA ===|"🤝 identical"| CB
-    style A fill:#2471A3,stroke:#1A5276,color:#fff
-    style B fill:#27AE60,stroke:#1E8449,color:#fff
-    style CA fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style CB fill:#8E44AD,stroke:#5B2C6F,color:#fff
+
+    classDef clusterA fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef clusterB fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    class A clusterA
+    class B clusterB
+    class CA,CB ca
 ```
 
 ---
@@ -224,10 +239,13 @@ flowchart LR
     end
     A <-->|"🔐 IPsec / WireGuard tunnel<br/>(mTLS on top)"| B
     CA ===|"🤝 identical"| CB
-    style A fill:#2471A3,stroke:#1A5276,color:#fff
-    style B fill:#27AE60,stroke:#1E8449,color:#fff
-    style CA fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style CB fill:#8E44AD,stroke:#5B2C6F,color:#fff
+
+    classDef clusterA fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef clusterB fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    class A clusterA
+    class B clusterB
+    class CA,CB ca
 ```
 
 ---
@@ -248,10 +266,15 @@ flowchart LR
     A <-->|"🔐 mTLS"| B
     CA -.->|"🪪 trusted by"| A
     CA -.->|"🪪 trusted by"| B
-    style A fill:#2471A3,stroke:#1A5276,color:#fff
-    style B fill:#27AE60,stroke:#1E8449,color:#fff
-    style CA fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style LAN fill:#2C3E50,stroke:#1ABC9C,color:#fff
+
+    classDef clusterA fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef clusterB fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    classDef lan fill:#2C3E50,stroke:#1ABC9C,color:#fff
+    class A clusterA
+    class B clusterB
+    class CA ca
+    class LAN lan
 ```
 
 > Across two datacenters/sites with no routed link, keep the service `ClusterIP` and connect via a WireGuard/IPsec site-to-site tunnel (same as Scenario D).
@@ -490,11 +513,13 @@ flowchart TB
     SA -->|"🪪 Cilium issues serving cert"| MA["🔵 Mesh API A"]
     SB -->|"🪪 Cilium issues serving cert"| MB["🟢 Mesh API B"]
     MA <-->|"🔐 mTLS (both trust same CA)"| MB
-    style CA fill:#8E44AD,stroke:#5B2C6F,color:#fff
-    style SA fill:#2471A3,stroke:#1A5276,color:#fff
-    style SB fill:#27AE60,stroke:#1E8449,color:#fff
-    style MA fill:#2471A3,stroke:#1A5276,color:#fff
-    style MB fill:#27AE60,stroke:#1E8449,color:#fff
+
+    classDef ca fill:#8E44AD,stroke:#5B2C6F,color:#fff
+    classDef clusterA fill:#2471A3,stroke:#1A5276,color:#fff
+    classDef clusterB fill:#27AE60,stroke:#1E8449,color:#fff
+    class CA ca
+    class SA,MA clusterA
+    class SB,MB clusterB
 ```
 
 > ⚠️ **Never** use `--allow-mismatching-ca` as a fix for a CA mismatch — it disables the
@@ -890,8 +915,9 @@ graph TB
     CB_CM -- "2️⃣ Accept & encrypt" --> CA_CM
     CA_EP -- "3️⃣ Sync Service endpoints" --> CB_EP
     CB_EP -- "4️⃣ Sync Service endpoints" --> CA_EP
-    style CA_CM fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style CB_CM fill:#4A90D9,stroke:#2C5F8A,color:#fff
+
+    classDef mesh fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    class CA_CM,CB_CM mesh
 ```
 
 ---
@@ -1282,7 +1308,9 @@ graph LR
     end
     HUB_A -- "📤 Service flow telemetry" --> UI
     HUB_B -- "📤 Service flow telemetry" --> UI
-    style UI fill:#F8E71C,stroke:#B3A100,color:#000
+
+    classDef ui fill:#F8E71C,stroke:#B3A100,color:#000
+    class UI ui
 ```
 
 ---
@@ -1314,9 +1342,13 @@ flowchart LR
     B_CIL -- "8️⃣ Encrypt + send back" --> TUNNEL
     TUNNEL -- "9️⃣ Decrypt @ A" --> A_CIL
     A_CIL -- "🔟 Deliver response" --> A_POD
-    style TUNNEL fill:#F5A623,stroke:#D4891E,color:#fff
-    style A_CIL fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style B_CIL fill:#7ED321,stroke:#4A8C12,color:#fff
+
+    classDef tunnel fill:#F5A623,stroke:#D4891E,color:#fff
+    classDef clusterA fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    classDef clusterB fill:#7ED321,stroke:#4A8C12,color:#fff
+    class TUNNEL tunnel
+    class A_CIL clusterA
+    class B_CIL clusterB
 ```
 
 ---
@@ -1399,9 +1431,12 @@ graph TB
     START --> IDENTIFY --> ASSIGN_ID --> INSTALL --> TEST_INSTALL --> ENABLE --> CONNECT
     CONNECT --> VERIFY_CONN --> DEPLOY --> EXPORT --> DEPLOY_DEBUG --> TEST --> HUBBLE
 
-    style START fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style TEST fill:#7ED321,stroke:#4A8C12,color:#fff
-    style HUBBLE fill:#F8E71C,stroke:#B3A100,color:#000
+    classDef start fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    classDef test fill:#7ED321,stroke:#4A8C12,color:#fff
+    classDef ui fill:#F8E71C,stroke:#B3A100,color:#000
+    class START start
+    class TEST test
+    class HUBBLE ui
 ```
 
 **Key takeaway:** Once Cilium Cluster Mesh is configured, a service in one cluster is reachable from another cluster **by the same DNS name** — no external load balancers, no VPN, no complex networking configuration. It just works. ✨
