@@ -2,12 +2,83 @@
 
 This directory contains a Kustomize-based deployment of [HashiCorp Vault](https://www.vaultproject.io/) configured for a kind (Kubernetes in Docker) learning environment. It provides two deployment profiles — **dev** (single-replica, file-backed) and **prod** (HA Raft cluster with Kubernetes-backed auto-unseal).
 
+---
+
+## 🗺️ Infrastructure Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "💻 Local Machine (Docker)"
+        subgraph "🐳 kind cluster-a"
+            A_CIL["🛡️ Cilium<br/>Agent + Operator"]
+            A_HUB["📊 Hubble<br/>Relay + UI"]
+            A_VAULT["🔐 Vault<br/>Secrets Manager"]
+            A_SS["🔏 Sealed Secrets<br/>GitOps Encryption"]
+            A_HARBOR["📦 Harbor<br/>Container Registry"]
+        end
+
+        subgraph "🐳 kind cluster-b"
+            B_CIL["🛡️ Cilium<br/>Agent + Operator"]
+            B_HUB["📊 Hubble<br/>Relay + UI"]
+            B_VAULT["🔐 Vault<br/>Secrets Manager"]
+            B_SS["🔏 Sealed Secrets<br/>GitOps Encryption"]
+        end
+
+        subgraph "🌐 Shared Infrastructure"
+            MESH["🌉 Cilium ClusterMesh<br/>🔐 mTLS + 🎯 Service Mesh"]
+            CA["🔑 Shared Root CA<br/>Digital Trust Anchor"]
+        end
+    end
+
+    subgraph "🏛️ Governance & IAM"
+        KC["👤 Keycloak<br/>Identity & Access Management"]
+        GOV["📋 Governance Policies<br/>SOC2, ISO 27001, HIPAA"]
+    end
+
+    subgraph "🔒 Security & Secrets"
+        VAULT["🔐 Vault<br/>Auto-Unseal + HA Raft"]
+        SS_CTRL["🔏 Sealed Secrets Controller<br/>RSA 4096-bit Encryption"]
+        UNSEAL["⏰ CronJob<br/>Auto-Unseal Recovery"]
+    end
+
+    A_CIL <-->|"🔐 Encrypted<br/>mTLS"| MESH
+    B_CIL <-->|"🔐 Encrypted<br/>mTLS"| MESH
+    CA -.->|"🪪 Trust"| A_CIL
+    CA -.->|"🪪 Trust"| B_CIL
+    CA -.->|"🪪 Trust"| VAULT
+
+    A_VAULT -->|"🔑 API Keys<br/>& Certificates"| VAULT
+    A_SS -->|"📦 SealedSecret CRD"| SS_CTRL
+    SS_CTRL -->|"🔓 Decrypt"| A_VAULT
+    UNSEAL -->|"🔐 Unseal Keys"| VAULT
+
+    KC -->|"👤 Authentication"| GOV
+    GOV -->|"🛡️ RBAC Policies"| A_CIL
+    GOV -->|"🛡️ RBAC Policies"| B_CIL
+
+    A_HARBOR -->|"📦 Images"| MESH
+    MESH -->|"🌐 Cross-Cluster<br/>Service Discovery"| B_CIL
+
+    classDef primary fill:#1E3A5F,color:#FFFFFF,stroke:#15294A,stroke-width:2px
+    classDef secondary fill:#2563EB,color:#FFFFFF,stroke:#1D4ED8,stroke-width:2px
+    classDef accent fill:#F59E0B,color:#FFFFFF,stroke:#D97706,stroke-width:2px
+    classDef success fill:#10B981,color:#FFFFFF,stroke:#059669,stroke-width:2px
+    classDef data fill:#0F766E,color:#FFFFFF,stroke:#0D5E57,stroke-width:2px
+
+    class A_CIL,B_CIL primary
+    class MESH secondary
+    class CA,VAULT,SS_CTRL accent
+    class KC,GOV data
+    class A_HUB,B_HUB,A_HARBOR success
+```
+
+---
+
 ## Architecture
 
 ### High-Level Design
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#2563EB", "tertiaryColor": "#3B82F6", "clusterBkg": "#FFFFFF", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 graph TB
     subgraph "Kubernetes Cluster (kind)"
         subgraph "vault-prod Namespace"
@@ -52,7 +123,6 @@ graph TB
 ### Component Architecture
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#2563EB", "tertiaryColor": "#3B82F6", "clusterBkg": "#F8FAFC", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 graph LR
     subgraph "Vault Pod (vault-N)"
         V([🏛️ Vault Server<br/>hashicorp/vault:1.18.0])
@@ -100,7 +170,6 @@ graph LR
 ## Security Architecture
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#10B981", "tertiaryColor": "#EF4444", "clusterBkg": "#F8FAFC", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 flowchart TB
     subgraph "Auto-Unseal on Startup"
         A[🔒 Vault starts<br/>in sealed state] --> B[📄 Vault reads<br/>vault.hcl]
@@ -150,7 +219,6 @@ flowchart TB
 ## HA Raft Consensus
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1E3A5F", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "secondaryColor": "#2563EB", "tertiaryColor": "#10B981", "lineColor": "#94A3B8", "fontFamily": "system-ui, -apple-system, sans-serif", "actorBorder": "#475569", "actorBkg": "#F8FAFC", "actorTextColor": "#1E293B", "noteBkgColor": "#FEF3C7", "noteBorderColor": "#F59E0B", "signalColor": "#94A3B8", "signalTextColor": "#475569"}}%%
 sequenceDiagram
     participant V0 as vault-0
     participant V1 as vault-1
@@ -380,7 +448,6 @@ All probes use `standbyok=true` so that standby nodes are considered healthy.
 ## Overlays Compared
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#475569", "primaryTextColor": "#FFFFFF", "primaryBorderColor": "#15294A", "lineColor": "#94A3B8", "secondaryColor": "#F59E0B", "tertiaryColor": "#1E3A5F", "clusterBkg": "#FFFFFF", "clusterBorder": "#E2E8F0", "nodeBorder": "#475569", "fontFamily": "system-ui, -apple-system, sans-serif"}}}%%
 graph TB
 
     subgraph "Base Layer (shared)"
