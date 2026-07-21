@@ -89,7 +89,7 @@ graph TB
     subgraph "Inside Kubernetes Cluster"
         subgraph "Controller Pod"
             C[⚙️ Controller]
-            KEY[🔑 Private Key<br/>(RSA 4096)]
+            KEY["🔑 Private Key<br/>RSA 4096"]
         end
         SS_CRD[📋 SealedSecret CRD]
         SEC_OUT[🔒 Secret<br/>plaintext]
@@ -97,7 +97,7 @@ graph TB
     end
 
     subgraph "Key Distribution"
-        PUB_CERT[🗝️ Public Certificate<br/>(safe to share)]
+        PUB_CERT["🗝️ Public Certificate<br/>safe to share"]
         WEB["🌐 Web Server / S3<br/>(distribution)"]
     end
 
@@ -170,16 +170,16 @@ Sealed Secrets uses **asymmetric encryption** with RSA 4096-bit keys:
 graph LR
     subgraph "Encryption (kubeseal)"
         PLAIN[📄 Secret<br/>plaintext]
-        CERT[🗝️ Public Cert<br/>(RSA 4096)]
-        AES[🔑 AES-256 key<br/>(ephemeral)]
+        CERT["🗝️ Public Cert<br/>RSA 4096"]
+        AES["🔑 AES-256 key<br/>ephemeral"]
         ENC[🔐 Encrypted payload]
         SS_ENC[📦 SealedSecret<br/>YAML]
     end
 
     subgraph "Decryption (Controller)"
         SS_ENC2[📦 SealedSecret<br/>YAML]
-        PRIV[🔐 Private Key<br/>(RSA 4096)]
-        DEC_AES[🔑 AES-256 key<br/>(recovered)]
+        PRIV["🔐 Private Key<br/>RSA 4096"]
+        DEC_AES["🔑 AES-256 key<br/>recovered"]
         PLAIN_OUT[📄 Secret<br/>plaintext]
     end
 
